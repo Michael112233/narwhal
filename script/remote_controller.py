@@ -56,7 +56,7 @@ for id in host_ids:
                         'ssh', '-p', str(port), '-o', 'ConnectTimeout=10',
                         '-o', 'StrictHostKeyChecking=no',
                         f'{username}@{host}',
-                        'git clone https://github.com/Michael112233/narwhal.git'
+                        'if [ -d "narwhal" ]; then cd narwhal && git pull origin main; else git clone -b main https://github.com/Michael112233/narwhal.git; fi'
                     ], capture_output=True, text=True, timeout=30)
                     
                     if result.returncode == 0:
@@ -75,9 +75,9 @@ for id in host_ids:
                 
                 continue
         try:
-            stdin, stdout, stderr = client.exec_command("ls")
-            print(stdout.read().decode())
-            print(stderr.read().decode())
+            stdin, stdout, stderr = client.exec_command("if [ -d 'narwhal' ]; then cd narwhal && git pull origin main; else git clone -b main https://github.com/Michael112233/narwhal.git; fi")
+            print("STDOUT:", stdout.read().decode())
+            print("STDERR:", stderr.read().decode())
         finally:
             try:
                 client.close()
