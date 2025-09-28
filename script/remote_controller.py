@@ -75,7 +75,6 @@ for id in host_ids:
                 
                 continue
         try:
-            # 
             stdin, stdout, stderr = client.exec_command("ls")
             print(stdout.read().decode())
             print(stderr.read().decode())
