@@ -106,6 +106,9 @@ impl Parameters {
         info!("Sync retry nodes set to {} nodes", self.sync_retry_nodes);
         info!("Batch size set to {} B", self.batch_size);
         info!("Max batch delay set to {} ms", self.max_batch_delay);
+        info!("---------------for generalized test-----------------");
+        info!("We set the quorum threshold to {}", self.quorum_threshold());
+        info!("We set the validity threshold to {}", self.validity_threshold());
     }
 }
 
