@@ -10,6 +10,9 @@ username = "wucy"
 key_path = os.path.expanduser("~/.ssh/id_rsa")
 passphrase = os.environ.get("SSH_KEY_PASSPHRASE")
 
+REPO_URL = os.environ.get("REPO_URL", "https://github.com/Michael112233/narwhal.git")
+BRANCH = os.environ.get("BRANCH", "GeneralizedTest")
+
 for id in host_ids:
     for port in ports:
         host = f"amd{id}.utah.cloudlab.us"
@@ -52,11 +55,16 @@ for id in host_ids:
                 # Try using system SSH as fallback
                 print(f"Trying system SSH as fallback...")
                 try:
+                    remote_cmd = (
+                        f"if [ -d 'narwhal' ]; then "
+                        f"cd narwhal && git fetch origin {BRANCH} && git checkout {BRANCH} && git pull origin {BRANCH}; "
+                        f"else git clone -b {BRANCH} {REPO_URL}; fi"
+                    )
                     result = subprocess.run([
                         'ssh', '-p', str(port), '-o', 'ConnectTimeout=10',
                         '-o', 'StrictHostKeyChecking=no',
                         f'{username}@{host}',
-                        'if [ -d "narwhal" ]; then cd narwhal && git pull origin main; else git clone -b main https://github.com/Michael112233/narwhal.git; fi'
+                        remote_cmd
                     ], capture_output=True, text=True, timeout=30)
                     
                     if result.returncode == 0:
@@ -75,7 +83,12 @@ for id in host_ids:
                 
                 continue
         try:
-            stdin, stdout, stderr = client.exec_command("if [ -d 'narwhal' ]; then cd narwhal && git pull origin main; else git clone -b main https://github.com/Michael112233/narwhal.git; fi")
+            remote_cmd = (
+                f"if [ -d 'narwhal' ]; then "
+                f"cd narwhal && git fetch origin {BRANCH} && git checkout {BRANCH} && git pull origin {BRANCH}; "
+                f"else git clone -b {BRANCH} {REPO_URL}; fi"
+            )
+            stdin, stdout, stderr = client.exec_command(remote_cmd)
             print("STDOUT:", stdout.read().decode())
             print("STDERR:", stderr.read().decode())
         finally:

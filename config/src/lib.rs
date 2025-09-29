@@ -165,19 +165,21 @@ impl Committee {
     }
 
     /// Returns the stake required to reach a quorum (2f+1).
-    pub fn validity_threshold(&self) -> Stake {
+    pub fn quorum_threshold(&self) -> Stake {
         // If N = 3f + 1 + k (0 <= k < 3)
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
-        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        2 * total_votes / 3 + 1
+        // let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        // 2 * total_votes / 3 + 1
+        total_votes / 2
     }
 
     /// Returns the stake required to reach availability (f+1).
-    pub fn quorum_threshold(&self) -> Stake {
+    pub fn validity_threshold(&self) -> Stake {
         // If N = 3f + 1 + k (0 <= k < 3)
         // then (N + 2) / 3 = f + 1 + k/3 = f + 1
-        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        (total_votes + 2) / 3
+        // let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        // (total_votes + 2) / 3
+        total_votes / 2
     }
 
     /// Returns the primary addresses of the target primary.
