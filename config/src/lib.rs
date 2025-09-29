@@ -171,7 +171,7 @@ impl Committee {
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         // 2 * total_votes / 3 + 1
         // let quorum_threshold = 2 * total_votes / 3 + 1; // 3
-        let quorum_threshold = 2 * total_votes / 3 + 2;
+        let quorum_threshold = 2 * total_votes / 3 + 1;
         info!("---------------for generalized test-----------------");
         info!("Quorum threshold set to {}", quorum_threshold);
         quorum_threshold
@@ -184,7 +184,7 @@ impl Committee {
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         // (total_votes + 2) / 3
         // let validity_threshold = (total_votes + 2) / 3;
-        let validity_threshold = (total_votes + 2) / 3 - 1;
+        let validity_threshold = (total_votes + 2) / 3;
         info!("---------------for generalized test-----------------");
         info!("Validity threshold set to {}", validity_threshold);
         validity_threshold
