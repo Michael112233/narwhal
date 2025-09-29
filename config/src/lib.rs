@@ -79,6 +79,10 @@ pub struct Parameters {
     /// The delay after which the workers seal a batch of transactions, even if `max_batch_size`
     /// is not reached. Denominated in ms.
     pub max_batch_delay: u64,
+    /// The quorum threshold.
+    pub quorum_threshold: Stake,
+    /// The validity threshold.
+    pub validity_threshold: Stake,
 }
 
 impl Default for Parameters {
