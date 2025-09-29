@@ -4,6 +4,7 @@ use clap::{crate_name, crate_version, App, AppSettings, ArgMatches, SubCommand};
 use config::Export as _;
 use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
+use log::info;
 use consensus::Consensus;
 use env_logger::Env;
 use primary::{Certificate, Primary};
@@ -84,6 +85,14 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         }
         None => Parameters::default(),
     };
+
+    // Log configured thresholds from parameters and computed thresholds from committee.
+    parameters.log();
+    info!(
+        "Computed quorum_threshold = {} | validity_threshold = {}",
+        committee.quorum_threshold(),
+        committee.validity_threshold()
+    );
 
     // Make the data store.
     let store = Store::new(store_path).context("Failed to create a store")?;
