@@ -4,15 +4,15 @@ import getpass
 import subprocess
 
 # ssh -p 28611 wucy@amd008.utah.cloudlab.us
-host_ids = [1315]
-ports = [25410]
+host_ids = [135]
+ports = [27610]
 username = "wucy"
 key_path = os.path.expanduser("~/.ssh/id_rsa")
 passphrase = os.environ.get("SSH_KEY_PASSPHRASE")
 
 for id in host_ids:
     for port in ports:
-        host = f"ms{id}.utah.cloudlab.us"
+        host = f"amd{id}.utah.cloudlab.us"
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.load_system_host_keys()

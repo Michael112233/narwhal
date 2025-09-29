@@ -17,7 +17,11 @@ python3 -m venv venv
 source venv/bin/activate
 
 cd benchmark
-pip install -r requirements.txt
+pip install boto3
+pip install matplotlib
+sudo -s
+apt install fabric
+exit
 
 fab local
 
