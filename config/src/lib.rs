@@ -79,10 +79,6 @@ pub struct Parameters {
     /// The delay after which the workers seal a batch of transactions, even if `max_batch_size`
     /// is not reached. Denominated in ms.
     pub max_batch_delay: u64,
-    /// The quorum threshold.
-    pub quorum_threshold: Stake,
-    /// The validity threshold.
-    pub validity_threshold: Stake,
 }
 
 impl Default for Parameters {
@@ -95,6 +91,8 @@ impl Default for Parameters {
             sync_retry_nodes: 3,
             batch_size: 500_000,
             max_batch_delay: 100,
+            quorum_threshold: 0,
+            validity_threshold: 0,
         }
     }
 }
@@ -111,8 +109,8 @@ impl Parameters {
         info!("Batch size set to {} B", self.batch_size);
         info!("Max batch delay set to {} ms", self.max_batch_delay);
         info!("---------------for generalized test-----------------");
-        info!("We set the quorum threshold to {}", self.quorum_threshold());
-        info!("We set the validity threshold to {}", self.validity_threshold());
+        info!("Quorum threshold set to {}", self.quorum_threshold);
+        info!("Validity threshold set to {}", self.validity_threshold);
     }
 }
 
@@ -177,7 +175,8 @@ impl Committee {
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         // 2 * total_votes / 3 + 1
-        total_votes / 2
+        quorum_threshold = total_votes / 2
+        quorum_threshold
     }
 
     /// Returns the stake required to reach availability (f+1).
@@ -186,7 +185,8 @@ impl Committee {
         // then (N + 2) / 3 = f + 1 + k/3 = f + 1
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         // (total_votes + 2) / 3
-        total_votes / 2
+        validity_threshold = total_votes / 2
+        validity_threshold
     }
 
     /// Returns the primary addresses of the target primary.
