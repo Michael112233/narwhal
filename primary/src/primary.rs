@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+use network::bandwidth_monitor::BandwidthStats;
 use crate::certificate_waiter::CertificateWaiter;
 use crate::core::Core;
 use crate::error::DagError;
@@ -76,7 +77,33 @@ impl Primary {
         let (tx_certificates_loopback, rx_certificates_loopback) = channel(CHANNEL_CAPACITY);
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
+        
+        // All monitors to track bandwidth usage.
+        let mut all_stats = Vec::new();
 
+        // Add monitor for each channel.
+        let stats_rx_primary_messages = BandwidthStats::new("rx_primary_messages".to_string());
+        let stats_rx_others_digests = BandwidthStats::new("rx_others_digests".to_string());
+        let stats_rx_our_digests = BandwidthStats::new("rx_our_digests".to_string());
+        let stats_rx_headers_loopback = BandwidthStats::new("rx_headers_loopback".to_string());
+        let stats_rx_certificates_loopback = BandwidthStats::new("rx_certificates_loopback".to_string());
+        let stats_rx_headers = BandwidthStats::new("rx_headers".to_string());
+        let stats_rx_sync_headers = BandwidthStats::new("rx_sync_headers".to_string());
+        let stats_rx_cert_requests = BandwidthStats::new("rx_cert_requests".to_string());
+        let stats_rx_consensus = BandwidthStats::new("rx_consensus".to_string());
+
+        all_stats.extend(vec![
+            stats_rx_primary_messages.clone(),
+            stats_rx_others_digests.clone(),
+            stats_rx_our_digests.clone(),
+            stats_rx_headers_loopback.clone(),
+            stats_rx_certificates_loopback.clone(),
+            stats_rx_headers.clone(),
+            stats_rx_sync_headers.clone(),
+            stats_rx_cert_requests.clone(),
+            stats_rx_consensus.clone(),
+        ]);
+        
         // Write the parameters to the logs.
         parameters.log();
 
@@ -100,6 +127,7 @@ impl Primary {
             PrimaryReceiverHandler {
                 tx_primary_messages,
                 tx_cert_requests,
+                stats: stats_rx_primary_messages.clone(),
             },
         );
         info!(
@@ -119,6 +147,8 @@ impl Primary {
             WorkerReceiverHandler {
                 tx_our_digests,
                 tx_others_digests,
+                stats_our: stats_rx_our_digests.clone(),
+                stats_others: stats_rx_others_digests.clone(),
             },
         );
         info!(
@@ -155,8 +185,13 @@ impl Primary {
             /* tx_proposer */ tx_parents,
         );
 
+        // Start bandwidth monitoring task with wave-based output.
+        let (wave_sender, wave_receiver) = tokio::sync::watch::channel(0u64);
+        network::spawn_bandwidth_monitor_with_wave(all_stats, wave_receiver);
+        
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
-        GarbageCollector::spawn(&name, &committee, consensus_round.clone(), rx_consensus);
+        // Pass wave_notifier to GarbageCollector
+        GarbageCollector::spawn_with_wave_notifier(&name, &committee, consensus_round.clone(), rx_consensus, Some(wave_sender));
 
         // Receives batch digests from other workers. They are only used to validate headers.
         PayloadReceiver::spawn(store.clone(), /* rx_workers */ rx_others_digests);
@@ -168,7 +203,7 @@ impl Primary {
             name,
             committee.clone(),
             store.clone(),
-            consensus_round,
+            consensus_round.clone(),
             parameters.gc_depth,
             parameters.sync_retry_delay,
             parameters.sync_retry_nodes,
@@ -200,6 +235,7 @@ impl Primary {
         // The `Helper` is dedicated to reply to certificates requests from other primaries.
         Helper::spawn(committee.clone(), store, rx_cert_requests);
 
+
         // NOTE: This log entry is used to compute performance.
         info!(
             "Primary {} successfully booted on {}",
@@ -218,11 +254,15 @@ impl Primary {
 struct PrimaryReceiverHandler {
     tx_primary_messages: Sender<PrimaryMessage>,
     tx_cert_requests: Sender<(Vec<Digest>, PublicKey)>,
+    stats: BandwidthStats,
 }
 
 #[async_trait]
 impl MessageHandler for PrimaryReceiverHandler {
     async fn dispatch(&self, writer: &mut Writer, serialized: Bytes) -> Result<(), Box<dyn Error>> {
+        // record the received bandwidth.
+        self.stats.record(serialized.len());
+        
         // Reply with an ACK.
         let _ = writer.send(Bytes::from("Ack")).await;
 
@@ -248,6 +288,8 @@ impl MessageHandler for PrimaryReceiverHandler {
 struct WorkerReceiverHandler {
     tx_our_digests: Sender<(Digest, WorkerId)>,
     tx_others_digests: Sender<(Digest, WorkerId)>,
+    stats_our: BandwidthStats,
+    stats_others: BandwidthStats,
 }
 
 #[async_trait]
@@ -257,18 +299,25 @@ impl MessageHandler for WorkerReceiverHandler {
         _writer: &mut Writer,
         serialized: Bytes,
     ) -> Result<(), Box<dyn Error>> {
+        // record the received bandwidth.
+        let bytes = serialized.len();
+
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
-            WorkerPrimaryMessage::OurBatch(digest, worker_id) => self
-                .tx_our_digests
-                .send((digest, worker_id))
-                .await
-                .expect("Failed to send workers' digests"),
-            WorkerPrimaryMessage::OthersBatch(digest, worker_id) => self
-                .tx_others_digests
-                .send((digest, worker_id))
-                .await
-                .expect("Failed to send workers' digests"),
+            WorkerPrimaryMessage::OurBatch(digest, worker_id) => {
+                self.stats_our.record(bytes);
+                self.tx_our_digests
+                    .send((digest, worker_id))
+                    .await
+                    .expect("Failed to send workers' digests");
+            }
+            WorkerPrimaryMessage::OthersBatch(digest, worker_id) => {
+                self.stats_others.record(bytes);
+                self.tx_others_digests
+                    .send((digest, worker_id))
+                    .await
+                    .expect("Failed to send workers' digests");
+            }
         }
         Ok(())
     }

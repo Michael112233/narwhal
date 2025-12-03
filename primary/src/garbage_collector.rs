@@ -5,10 +5,12 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::PublicKey;
 use network::SimpleSender;
+use log::info;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::watch;
 
 /// Receives the highest round reached by consensus and update it for all tasks.
 pub struct GarbageCollector {
@@ -20,6 +22,8 @@ pub struct GarbageCollector {
     addresses: Vec<SocketAddr>,
     /// A network sender to notify our workers of cleanup events.
     network: SimpleSender,
+    /// Wave notifier for bandwidth monitoring.
+    wave_notifier: Option<watch::Sender<u64>>,
 }
 
 impl GarbageCollector {
@@ -28,6 +32,16 @@ impl GarbageCollector {
         committee: &Committee,
         consensus_round: Arc<AtomicU64>,
         rx_consensus: Receiver<Certificate>,
+    ) {
+        Self::spawn_with_wave_notifier(name, committee, consensus_round, rx_consensus, None);
+    }
+
+    pub fn spawn_with_wave_notifier(
+        name: &PublicKey,
+        committee: &Committee,
+        consensus_round: Arc<AtomicU64>,
+        rx_consensus: Receiver<Certificate>,
+        wave_notifier: Option<watch::Sender<u64>>,
     ) {
         let addresses = committee
             .our_workers(name)
@@ -42,6 +56,7 @@ impl GarbageCollector {
                 rx_consensus,
                 addresses,
                 network: SimpleSender::new(),
+                wave_notifier,
             }
             .run()
             .await;
@@ -56,6 +71,15 @@ impl GarbageCollector {
             let round = certificate.round();
             if round > last_committed_round {
                 last_committed_round = round;
+                let current_wave = round; // Use round as wave ID
+
+                // Log wave information for bandwidth utilization analysis
+                info!("WAVE_UPDATE: wave={} round={}", current_wave, round);
+
+                // Notify bandwidth monitor about wave update
+                if let Some(ref sender) = self.wave_notifier {
+                    let _ = sender.send(current_wave);
+                }
 
                 // Trigger cleanup on the primary.
                 self.consensus_round.store(round, Ordering::Relaxed);

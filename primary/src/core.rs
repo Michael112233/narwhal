@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use adversary::attack::attack;
 
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
@@ -112,6 +113,26 @@ impl Core {
             .run()
             .await;
         });
+    }
+
+    fn get_node_index(&self) -> usize {
+        self.committee
+            .authorities
+            .keys()
+            .enumerate()
+            .find(|(_, key)| **key == self.name)
+            .map(|(index, _)| index)
+            .unwrap_or(0)
+    }
+
+    fn get_node_index_by_key(&self, key: &PublicKey) -> usize {
+        self.committee
+            .authorities
+            .keys()
+            .enumerate()
+            .find(|(_, k)| **k == *key)
+            .map(|(index, _)| index)
+            .unwrap_or(0)
     }
 
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
@@ -224,10 +245,16 @@ impl Core {
         {
             debug!("Assembled {:?}", certificate);
 
+            // Execute attack before broadcasting certificate 
+            let from_node_id = self.get_node_index();
+            let others = self.committee.others_primaries(&self.name);
+            for (to_key, _) in &others {
+                let to_node_id = self.get_node_index_by_key(to_key);
+                attack(from_node_id, to_node_id).await;
+            }
+
             // Broadcast the certificate.
-            let addresses = self
-                .committee
-                .others_primaries(&self.name)
+            let addresses = others
                 .iter()
                 .map(|(_, x)| x.primary_to_primary)
                 .collect();

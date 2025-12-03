@@ -175,6 +175,14 @@ impl Consensus {
                 }
             }
 
+            // Log wave information for bandwidth utilization analysis
+            // A wave is a batch of certificates committed together
+            // When we commit a wave, it means 2f+1 nodes have reached this wave
+            let wave_id = state.last_committed_round;
+            info!("WAVE_START: wave={} certificates={}", wave_id, sequence.len());
+            // Output signal that wave has started (2f+1 nodes have reached this wave)
+            info!("wave {} started", wave_id);
+
             // Output the sequence in the right order.
             for certificate in sequence {
                 #[cfg(not(feature = "benchmark"))]
@@ -195,6 +203,8 @@ impl Consensus {
                     warn!("Failed to output certificate: {}", e);
                 }
             }
+            
+            info!("WAVE_END: wave={}", wave_id);
         }
     }
 
