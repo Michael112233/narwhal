@@ -254,7 +254,7 @@ def main():
     attack_rs_path = workspace_path / 'adversary' / 'src' / 'attack.rs'
     
     # Rate values: 25000, 50000, 75000, ..., 200000
-    rates = list(range(550000, 850001, 50000))
+    rates = list(range(100000, 850001, 50000))
     trigger_values = [True, False]
     
     # Backup original files
