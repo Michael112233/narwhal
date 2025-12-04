@@ -7,6 +7,8 @@ from benchmark.utils import Print
 from benchmark.plot import Ploter, PlotError
 from benchmark.instance import InstanceManager
 from benchmark.remote import Bench, BenchError
+from benchmark.cloudlab_instance import CloudLabInstanceManager
+from benchmark.cloudlab_remote import CloudLabBench
 
 
 @task
@@ -95,7 +97,7 @@ def remote(ctx, debug=False):
     ''' Run benchmarks on AWS '''
     bench_params = {
         'faults': 3,
-        'nodes': [10],
+        'nodes': 4,
         'workers': 1,
         'collocate': True,
         'rate': [10_000, 110_000],
@@ -151,3 +153,69 @@ def logs(ctx):
         print(LogParser.process('./logs', faults='?').result())
     except ParseError as e:
         Print.error(BenchError('Failed to parse logs', e))
+
+
+# CloudLab tasks
+@task
+def cloudlab_info(ctx):
+    ''' Display connect information about all CloudLab nodes '''
+    try:
+        CloudLabInstanceManager.make().print_info()
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def cloudlab_install(ctx):
+    ''' Install the codebase on all CloudLab nodes '''
+    try:
+        CloudLabBench(ctx).install()
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def cloudlab_remote(ctx, debug=False):
+    ''' Run benchmarks on CloudLab '''
+    bench_params = {
+        'faults': 0,
+        'nodes': [4],
+        'workers': 1,
+        'collocate': True,
+        'rate': [100_000, 150_000, 200_000, 250_000, 300_000, 350_000, 400_000, 450_000, 500_000, 550_000, 600_000],
+        'tx_size': 512,
+        'duration': 300,
+        'runs': 3,
+        'trigger_attack': [True, False], 
+    }
+    node_params = {
+        'header_size': 1_000,  # bytes
+        'max_header_delay': 200,  # ms
+        'gc_depth': 50,  # rounds
+        'sync_retry_delay': 10_000,  # ms
+        'sync_retry_nodes': 3,  # number of nodes
+        'batch_size': 500_000,  # bytes
+        'max_batch_delay': 200  # ms
+    }
+    try:
+        CloudLabBench(ctx).run(bench_params, node_params, debug)
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def cloudlab_status(ctx):
+    ''' Check if benchmark processes are running on CloudLab nodes '''
+    try:
+        CloudLabBench(ctx).status()
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def cloudlab_kill(ctx):
+    ''' Stop execution on all CloudLab nodes '''
+    try:
+        CloudLabBench(ctx).kill()
+    except BenchError as e:
+        Print.error(e)
