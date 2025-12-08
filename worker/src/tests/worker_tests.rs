@@ -35,7 +35,8 @@ async fn handle_clients_transactions() {
     }
 
     // Send enough transactions to create a batch.
-    let mut network = SimpleSender::new();
+    let sender_address = committee.worker(&name, &id).unwrap().worker_to_worker;
+    let mut network = SimpleSender::new(committee.clone(), sender_address);
     let address = committee.worker(&name, &id).unwrap().transactions;
     network.send(address, Bytes::from(transaction())).await;
     network.send(address, Bytes::from(transaction())).await;

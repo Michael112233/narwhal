@@ -10,12 +10,14 @@ use rand::SeedableRng as _;
 use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
 use tokio::time::{sleep, Duration};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use adversary::attack::{GROUP, NETWORK_DELAY, TRIGGER_NETWORK_INTERRUPT};
+use config::{Committee, Import as _};
 
 #[cfg(test)]
 #[path = "tests/reliable_sender_tests.rs"]
@@ -33,19 +35,25 @@ pub struct ReliableSender {
     connections: HashMap<SocketAddr, Sender<InnerMessage>>,
     /// Small RNG just used to shuffle nodes and randomize connections (not crypto related).
     rng: SmallRng,
+    /// The committee.
+    committee: Committee,
+    /// Sender address
+    sender_address: SocketAddr,
 }
 
 impl std::default::Default for ReliableSender {
     fn default() -> Self {
-        Self::new()
+        Self::new(Committee::import("config/committee.json").unwrap(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
     }
 }
 
 impl ReliableSender {
-    pub fn new() -> Self {
+    pub fn new(committee: Committee, sender_address: SocketAddr) -> Self {
         Self {
             connections: HashMap::new(),
             rng: SmallRng::from_entropy(),
+            committee,
+            sender_address,
         }
     }
 
@@ -79,9 +87,27 @@ impl ReliableSender {
         data: Bytes,
     ) -> Vec<CancelHandler> {
         let mut handlers = Vec::new();
+        let mut delay_addresses = Vec::new();
+        let mut not_delay_addresses = Vec::new();
         for address in addresses {
+            let sender_index = self.committee.address_to_index(&self.sender_address);
+            let receiver_index = self.committee.address_to_index(&address);
+            if TRIGGER_NETWORK_INTERRUPT && GROUP[sender_index] != GROUP[receiver_index] {
+                delay_addresses.push(address);
+            } else {
+                not_delay_addresses.push(address);
+            }
+        }
+        for address in not_delay_addresses {
             let handler = self.send(address, data.clone()).await;
             handlers.push(handler);
+        }
+        if !delay_addresses.is_empty() {
+            sleep(Duration::from_millis(NETWORK_DELAY)).await;
+            for address in delay_addresses {
+                let handler = self.send(address, data.clone()).await;
+                handlers.push(handler);
+            }
         }
         handlers
     }

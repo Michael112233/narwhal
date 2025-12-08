@@ -10,6 +10,7 @@ use ed25519_dalek::{Digest as _, Sha512};
 #[cfg(feature = "benchmark")]
 use log::info;
 use network::ReliableSender;
+use config::Committee;
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
 use std::net::SocketAddr;
@@ -50,6 +51,8 @@ impl BatchMaker {
         rx_transaction: Receiver<Transaction>,
         tx_message: Sender<QuorumWaiterMessage>,
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
+        committee: Committee,
+        sender_address: SocketAddr,
     ) {
         tokio::spawn(async move {
             Self {
@@ -60,7 +63,7 @@ impl BatchMaker {
                 workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                network: ReliableSender::new(),
+                network: ReliableSender::new(committee, sender_address),
             }
             .run()
             .await;

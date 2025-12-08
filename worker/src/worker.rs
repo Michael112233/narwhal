@@ -76,6 +76,11 @@ impl Worker {
         worker.handle_workers_messages(tx_primary);
 
         // The `PrimaryConnector` allows the worker to send messages to its primary.
+        let sender_address = worker
+            .committee
+            .worker(&worker.name, &worker.id)
+            .expect("Our public key or worker id is not in the committee")
+            .worker_to_worker;
         PrimaryConnector::spawn(
             worker
                 .committee
@@ -83,6 +88,8 @@ impl Worker {
                 .expect("Our public key is not in the committee")
                 .worker_to_primary,
             rx_primary,
+            worker.committee.clone(),
+            sender_address,
         );
 
         // NOTE: This log entry is used to compute performance.
@@ -155,6 +162,11 @@ impl Worker {
         // The transactions are sent to the `BatchMaker` that assembles them into batches. It then broadcasts
         // (in a reliable manner) the batches to all other workers that share the same `id` as us. Finally, it
         // gathers the 'cancel handlers' of the messages and send them to the `QuorumWaiter`.
+        let sender_address = self
+            .committee
+            .worker(&self.name, &self.id)
+            .expect("Our public key or worker id is not in the committee")
+            .worker_to_worker;
         BatchMaker::spawn(
             self.parameters.batch_size,
             self.parameters.max_batch_delay,
@@ -166,6 +178,8 @@ impl Worker {
                 .iter()
                 .map(|(name, addresses)| (*name, addresses.worker_to_worker))
                 .collect(),
+            self.committee.clone(),
+            sender_address,
         );
 
         // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards
@@ -216,6 +230,7 @@ impl Worker {
 
         // The `Helper` is dedicated to reply to batch requests from other workers.
         Helper::spawn(
+            self.name,
             self.id,
             self.committee.clone(),
             self.store.clone(),

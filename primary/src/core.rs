@@ -86,6 +86,11 @@ impl Core {
         tx_consensus: Sender<Certificate>,
         tx_proposer: Sender<(Vec<Digest>, Round)>,
     ) {
+        let sender_address = committee
+            .primary(&name)
+            .expect("Our public key is not in the committee")
+            .primary_to_primary;
+        let committee_clone = committee.clone();
         tokio::spawn(async move {
             Self {
                 name,
@@ -107,32 +112,12 @@ impl Core {
                 current_header: Header::default(),
                 votes_aggregator: VotesAggregator::new(),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                network: ReliableSender::new(),
+                network: ReliableSender::new(committee_clone, sender_address),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
             .await;
         });
-    }
-
-    fn get_node_index(&self) -> usize {
-        self.committee
-            .authorities
-            .keys()
-            .enumerate()
-            .find(|(_, key)| **key == self.name)
-            .map(|(index, _)| index)
-            .unwrap_or(0)
-    }
-
-    fn get_node_index_by_key(&self, key: &PublicKey) -> usize {
-        self.committee
-            .authorities
-            .keys()
-            .enumerate()
-            .find(|(_, k)| **k == *key)
-            .map(|(index, _)| index)
-            .unwrap_or(0)
     }
 
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
@@ -244,14 +229,7 @@ impl Core {
                 .append(vote, &self.committee, &self.current_header)?
         {
             debug!("Assembled {:?}", certificate);
-
-            // Execute attack before broadcasting certificate 
-            let from_node_id = self.get_node_index();
             let others = self.committee.others_primaries(&self.name);
-            for (to_key, _) in &others {
-                let to_node_id = self.get_node_index_by_key(to_key);
-                attack(from_node_id, to_node_id).await;
-            }
 
             // Broadcast the certificate.
             let addresses = others

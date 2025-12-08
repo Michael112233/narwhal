@@ -8,10 +8,13 @@ use rand::prelude::SliceRandom as _;
 use rand::rngs::SmallRng;
 use rand::SeedableRng as _;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use tokio::net::TcpStream;
+use tokio::time::{sleep, Duration};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use adversary::attack::{GROUP, NETWORK_DELAY, TRIGGER_NETWORK_INTERRUPT};
+use config::{Committee, Import as _};
 
 #[cfg(test)]
 #[path = "tests/simple_sender_tests.rs"]
@@ -24,19 +27,25 @@ pub struct SimpleSender {
     connections: HashMap<SocketAddr, Sender<Bytes>>,
     /// Small RNG just used to shuffle nodes and randomize connections (not crypto related).
     rng: SmallRng,
+    /// The committee.
+    committee: Committee,
+    /// Sender address
+    sender_address: SocketAddr,
 }
 
 impl std::default::Default for SimpleSender {
     fn default() -> Self {
-        Self::new()
+        Self::new(Committee::import("config/committee.json").unwrap(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
     }
 }
 
 impl SimpleSender {
-    pub fn new() -> Self {
+    pub fn new(committee: Committee, sender_address: SocketAddr) -> Self {
         Self {
             connections: HashMap::new(),
             rng: SmallRng::from_entropy(),
+            committee,
+            sender_address,
         }
     }
 
@@ -66,8 +75,25 @@ impl SimpleSender {
 
     /// Try (best-effort) to broadcast the message to all specified addresses.
     pub async fn broadcast(&mut self, addresses: Vec<SocketAddr>, data: Bytes) {
+        let mut delay_addresses = Vec::new();
+        let mut not_delay_addresses = Vec::new();
         for address in addresses {
+            let sender_index = self.committee.address_to_index(&self.sender_address);
+            let receiver_index = self.committee.address_to_index(&address);
+            if TRIGGER_NETWORK_INTERRUPT && GROUP[sender_index] != GROUP[receiver_index] {
+                delay_addresses.push(address);
+            } else {
+                not_delay_addresses.push(address);
+            }
+        }
+        for address in not_delay_addresses {
             self.send(address, data.clone()).await;
+        }
+        if !delay_addresses.is_empty() {
+            sleep(Duration::from_millis(NETWORK_DELAY)).await;
+            for address in delay_addresses {
+                self.send(address, data.clone()).await;
+            }
         }
     }
 

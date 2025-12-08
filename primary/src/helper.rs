@@ -22,16 +22,22 @@ pub struct Helper {
 
 impl Helper {
     pub fn spawn(
+        name: PublicKey,
         committee: Committee,
         store: Store,
         rx_primaries: Receiver<(Vec<Digest>, PublicKey)>,
     ) {
+        let sender_address = committee
+            .primary(&name)
+            .expect("Our public key is not in the committee")
+            .primary_to_primary;
+        let committee_clone = committee.clone();
         tokio::spawn(async move {
             Self {
                 committee,
                 store,
                 rx_primaries,
-                network: SimpleSender::new(),
+                network: SimpleSender::new(committee_clone, sender_address),
             }
             .run()
             .await;

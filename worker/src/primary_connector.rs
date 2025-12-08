@@ -1,6 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::worker::SerializedBatchDigestMessage;
 use bytes::Bytes;
+use config::Committee;
 use network::SimpleSender;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Receiver;
@@ -16,12 +17,17 @@ pub struct PrimaryConnector {
 }
 
 impl PrimaryConnector {
-    pub fn spawn(primary_address: SocketAddr, rx_digest: Receiver<SerializedBatchDigestMessage>) {
+    pub fn spawn(
+        primary_address: SocketAddr,
+        rx_digest: Receiver<SerializedBatchDigestMessage>,
+        committee: Committee,
+        sender_address: SocketAddr,
+    ) {
         tokio::spawn(async move {
             Self {
                 primary_address,
                 rx_digest,
-                network: SimpleSender::new(),
+                network: SimpleSender::new(committee, sender_address),
             }
             .run()
             .await;

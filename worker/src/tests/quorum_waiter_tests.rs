@@ -36,7 +36,12 @@ async fn wait_for_quorum() {
 
     // Broadcast the batch through the network.
     let bytes = Bytes::from(serialized.clone());
-    let handlers = ReliableSender::new().broadcast(addresses, bytes).await;
+    let sender_address = committee
+        .worker(&myself, &0)
+        .unwrap()
+        .worker_to_worker;
+    let mut sender = ReliableSender::new(committee.clone(), sender_address);
+    let handlers = sender.broadcast(addresses, bytes).await;
 
     // Forward the batch along with the handlers to the `QuorumWaiter`.
     let message = QuorumWaiterMessage {

@@ -145,6 +145,122 @@ class Committee:
         with open(filename, 'w') as f:
             dump(self.json, f, indent=4, sort_keys=True)
 
+    def print_all_addresses(self):
+        ''' Print all addresses with their categories '''
+        print("\n" + "="*80)
+        print("所有地址及其类别 (All Addresses and Categories)")
+        print("="*80 + "\n")
+
+        for auth_idx, (name, authority) in enumerate(self.json['authorities'].items()):
+            print(f"Authority {auth_idx} (Name: {name})")
+            print(f"  Stake: {authority['stake']}")
+            
+            # Primary 地址
+            print("  Primary 地址:")
+            print(f"    [类别: primary_to_primary] {authority['primary']['primary_to_primary']} (WAN - 接收来自其他primaries的消息)")
+            print(f"    [类别: worker_to_primary] {authority['primary']['worker_to_primary']} (LAN - 接收来自workers的消息)")
+
+            # Worker 地址
+            print("  Worker 地址:")
+            # Get worker keys - they can be int or str depending on JSON serialization
+            worker_keys = list(authority['workers'].keys())
+            # Sort keys: try to convert to int for proper numeric sorting
+            def sort_key(k):
+                try:
+                    return int(k)
+                except (ValueError, TypeError):
+                    return k
+            
+            for worker_key in sorted(worker_keys, key=sort_key):
+                worker = authority['workers'][worker_key]
+                # Display worker_id nicely
+                try:
+                    worker_id = int(worker_key)
+                except (ValueError, TypeError):
+                    worker_id = worker_key
+                print(f"    Worker {worker_id}:")
+                print(f"      [类别: primary_to_worker] {worker['primary_to_worker']} (LAN - 接收来自primary的消息)")
+                print(f"      [类别: transactions] {worker['transactions']} (WAN - 接收客户端交易)")
+                print(f"      [类别: worker_to_worker] {worker['worker_to_worker']} (WAN - 接收来自其他workers的消息)")
+            print()
+
+        # 按类别汇总
+        print("="*80)
+        print("按类别汇总 (Summary by Category)")
+        print("="*80 + "\n")
+
+        print("[类别: primary_to_primary] - Primary到Primary通信 (WAN):")
+        for auth_idx, (name, authority) in enumerate(self.json['authorities'].items()):
+            print(f"  Authority {auth_idx}: {authority['primary']['primary_to_primary']}")
+        print()
+
+        print("[类别: worker_to_primary] - Worker到Primary通信 (LAN):")
+        for auth_idx, (name, authority) in enumerate(self.json['authorities'].items()):
+            print(f"  Authority {auth_idx}: {authority['primary']['worker_to_primary']}")
+        print()
+
+        print("[类别: primary_to_worker] - Primary到Worker通信 (LAN):")
+        for auth_idx, (name, authority) in enumerate(self.json['authorities'].items()):
+            worker_keys = list(authority['workers'].keys())
+            def sort_key(k):
+                try:
+                    return int(k)
+                except (ValueError, TypeError):
+                    return k
+            for worker_key in sorted(worker_keys, key=sort_key):
+                worker = authority['workers'][worker_key]
+                try:
+                    worker_id = int(worker_key)
+                except (ValueError, TypeError):
+                    worker_id = worker_key
+                print(f"  Authority {auth_idx}, Worker {worker_id}: {worker['primary_to_worker']}")
+        print()
+
+        print("[类别: transactions] - 客户端交易接收 (WAN):")
+        for auth_idx, (name, authority) in enumerate(self.json['authorities'].items()):
+            worker_keys = list(authority['workers'].keys())
+            def sort_key(k):
+                try:
+                    return int(k)
+                except (ValueError, TypeError):
+                    return k
+            for worker_key in sorted(worker_keys, key=sort_key):
+                worker = authority['workers'][worker_key]
+                try:
+                    worker_id = int(worker_key)
+                except (ValueError, TypeError):
+                    worker_id = worker_key
+                print(f"  Authority {auth_idx}, Worker {worker_id}: {worker['transactions']}")
+        print()
+
+        print("[类别: worker_to_worker] - Worker到Worker通信 (WAN):")
+        for auth_idx, (name, authority) in enumerate(self.json['authorities'].items()):
+            worker_keys = list(authority['workers'].keys())
+            def sort_key(k):
+                try:
+                    return int(k)
+                except (ValueError, TypeError):
+                    return k
+            for worker_key in sorted(worker_keys, key=sort_key):
+                worker = authority['workers'][worker_key]
+                try:
+                    worker_id = int(worker_key)
+                except (ValueError, TypeError):
+                    worker_id = worker_key
+                print(f"  Authority {auth_idx}, Worker {worker_id}: {worker['worker_to_worker']}")
+        print()
+
+        # 统计信息
+        print("="*80)
+        print("统计信息 (Statistics)")
+        print("="*80)
+        print(f"总Authority数量: {self.size()}")
+        print(f"总Worker数量: {self.workers()}")
+        print("地址类型总数: 5 (primary_to_primary, worker_to_primary, primary_to_worker, transactions, worker_to_worker)")
+        total_addresses = self.size() * 2 + self.workers() * 3
+        print(f"总地址数量: {total_addresses}")
+        print("="*80 + "\n")
+
     @staticmethod
     def ip(address):
         assert isinstance(address, str)

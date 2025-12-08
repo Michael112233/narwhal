@@ -62,6 +62,11 @@ impl Synchronizer {
         sync_retry_nodes: usize,
         rx_message: Receiver<PrimaryWorkerMessage>,
     ) {
+        let sender_address = committee
+            .worker(&name, &id)
+            .expect("Our public key or worker id is not in the committee")
+            .worker_to_worker;
+        let committee_clone = committee.clone();
         tokio::spawn(async move {
             Self {
                 name,
@@ -72,7 +77,7 @@ impl Synchronizer {
                 sync_retry_delay,
                 sync_retry_nodes,
                 rx_message,
-                network: SimpleSender::new(),
+                network: SimpleSender::new(committee_clone, sender_address),
                 round: Round::default(),
                 pending: HashMap::new(),
             }

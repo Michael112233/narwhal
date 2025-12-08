@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use crate::common::transaction;
+use crate::common::{committee, transaction};
 use tokio::sync::mpsc::channel;
 
 #[tokio::test]
@@ -8,6 +8,8 @@ async fn make_batch() {
     let (tx_transaction, rx_transaction) = channel(1);
     let (tx_message, mut rx_message) = channel(1);
     let dummy_addresses = vec![(PublicKey::default(), "127.0.0.1:0".parse().unwrap())];
+    let committee = committee();
+    let sender_address = "127.0.0.1:0".parse().unwrap();
 
     // Spawn a `BatchMaker` instance.
     BatchMaker::spawn(
@@ -16,6 +18,8 @@ async fn make_batch() {
         rx_transaction,
         tx_message,
         /* workers_addresses */ dummy_addresses,
+        committee,
+        sender_address,
     );
 
     // Send enough transactions to seal a batch.
@@ -36,6 +40,8 @@ async fn batch_timeout() {
     let (tx_transaction, rx_transaction) = channel(1);
     let (tx_message, mut rx_message) = channel(1);
     let dummy_addresses = vec![(PublicKey::default(), "127.0.0.1:0".parse().unwrap())];
+    let committee = committee();
+    let sender_address = "127.0.0.1:0".parse().unwrap();
 
     // Spawn a `BatchMaker` instance.
     BatchMaker::spawn(
@@ -44,6 +50,8 @@ async fn batch_timeout() {
         rx_transaction,
         tx_message,
         /* workers_addresses */ dummy_addresses,
+        committee,
+        sender_address,
     );
 
     // Do not send enough transactions to seal a batch..

@@ -70,6 +70,9 @@ class LocalBench:
             names = [x.name for x in keys]
             committee = LocalCommittee(names, self.BASE_PORT, self.workers)
             committee.print(PathMaker.committee_file())
+            
+            # Print all addresses with categories
+            # committee.print_all_addresses()
 
             self.node_parameters.print(PathMaker.parameters_file())
 
