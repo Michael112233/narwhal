@@ -201,18 +201,21 @@ class BenchParameters:
                 raise ConfigError('Missing or invalid number of nodes')
             self.nodes = [int(x) for x in nodes]
 
-            rate_type = json['rate_type']
-            if rate_type not in ['balanced', 'imbalanced']:
+            self.rate_type = json['rate_type']
+            if self.rate_type == 'imbalanced':
+                self.imbalanced_rate = json['imbalanced_rate']
+                self.imbalanced_rate = self.imbalanced_rate if isinstance(self.imbalanced_rate, list) else [self.imbalanced_rate]
+                if not self.imbalanced_rate:
+                    raise ConfigError('Missing imbalanced rate')
+                self.imbalanced_rate = [int(x) for x in self.imbalanced_rate]
+            elif self.rate_type == 'balanced':
+                rate = json['rate']
+                rate = rate if isinstance(rate, list) else [rate]
+                if not rate:
+                    raise ConfigError('Missing input rate')
+                self.rate = [int(x) for x in rate]
+            else:
                 raise ConfigError('Invalid rate type')
-
-            rate = json['rate']
-            rate = rate if isinstance(rate, list) else [rate]
-            if not rate:
-                raise ConfigError('Missing input rate')
-            self.rate = [int(x) for x in rate]
-
-            # if rate_type == 'balanced':
-                
             
             self.workers = int(json['workers'])
 
@@ -234,6 +237,9 @@ class BenchParameters:
 
         if min(self.nodes) <= self.faults:
             raise ConfigError('There should be more nodes than faults')
+
+        if self.rate_type == 'imbalanced' and len(self.imbalanced_rate) != min(self.nodes) - self.faults:
+            raise ConfigError('Number of imbalanced rates must match number of nodes minus faults')
 
 
 class PlotParameters:

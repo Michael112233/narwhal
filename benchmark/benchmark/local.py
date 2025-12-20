@@ -44,7 +44,10 @@ class LocalBench:
 
         try:
             Print.info('Setting up testbed...')
-            nodes, rate = self.nodes[0], self.rate[0]
+            if self.rate_type == 'balanced':
+                nodes, rate = self.nodes[0], self.rate[0]
+            elif self.rate_type == 'imbalanced':
+                nodes, rate = self.nodes[0], self.imbalanced_rate[0]
 
             # Cleanup all files.
             cmd = f'{CommandMaker.clean_logs()} ; {CommandMaker.cleanup()}'
@@ -75,17 +78,36 @@ class LocalBench:
 
             # Run the clients (they will wait for the nodes to be ready).
             workers_addresses = committee.workers_addresses(self.faults)
-            rate_share = ceil(rate / committee.workers())
-            for i, addresses in enumerate(workers_addresses):
-                for (id, address) in addresses:
-                    cmd = CommandMaker.run_client(
-                        address,
-                        self.tx_size,
-                        rate_share,
-                        [x for y in workers_addresses for _, x in y]
-                    )
-                    log_file = PathMaker.client_log_file(i, id)
-                    self._background_run(cmd, log_file)
+            Print.info('Starting clients...')
+            
+            if self.rate_type == 'imbalanced':
+                client_rates = self.imbalanced_rate
+                for i, addresses in enumerate(workers_addresses):
+                    for (id, address) in addresses:
+                        cmd = CommandMaker.run_client(
+                            address,
+                            self.tx_size,
+                            client_rates[i],
+                            [x for y in workers_addresses for _, x in y]
+                        )
+                        # 输出每个client的执行指令
+                        Print.info(f'Client {i}-{id}: {cmd}')
+                        log_file = PathMaker.client_log_file(i, id)
+                        self._background_run(cmd, log_file)
+            else:
+                rate_share = ceil(rate / committee.workers())
+                for i, addresses in enumerate(workers_addresses):
+                    for (id, address) in addresses:
+                        cmd = CommandMaker.run_client(
+                            address,
+                            self.tx_size,
+                            rate_share,
+                            [x for y in workers_addresses for _, x in y]
+                        )
+                        # 输出每个client的执行指令
+                        Print.info(f'Client {i}-{id}: {cmd}')
+                        log_file = PathMaker.client_log_file(i, id)
+                        self._background_run(cmd, log_file)
 
             # Run the primaries (except the faulty ones).
             for i, address in enumerate(committee.primary_addresses(self.faults)):

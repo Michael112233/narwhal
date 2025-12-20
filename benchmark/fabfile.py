@@ -16,10 +16,11 @@ def local(ctx, debug=True):
         'faults': 0,
         'nodes': 10,
         'workers': 1,
-        'rate_type': 'imbalanced',
-        'rate': 50_000,
+        'rate_type': 'balanced',
+        'rate': 144200,   # balanced rate
+        # 'imbalanced_rate': [100, 20000, 10000, 2000, 10000, 2000, 50000, 2000, 100, 50000], # imbalanced rate
         'tx_size': 512,
-        'duration': 20,
+        'duration': 60,
     }
     node_params = {
         'header_size': 1_000,  # bytes
