@@ -250,6 +250,7 @@ impl Core {
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
         debug!("Processing {:?}", certificate);
+        debug!("Received certificate from network: round {}, origin: {}, digest: {}", certificate.round(), certificate.origin(), certificate.digest());
 
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
@@ -277,7 +278,7 @@ impl Core {
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
-
+                
         // Check if we have enough certificates to enter a new dag round and propose a header.
         if let Some(parents) = self
             .certificates_aggregators

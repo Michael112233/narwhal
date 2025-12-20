@@ -74,10 +74,8 @@ impl CertificatesAggregator {
         if !self.used.insert(origin) {
             return Ok(None);
         }
-
         self.certificates.push(certificate.digest());
         self.weight += committee.stake(&origin);
-        debug!("In round {}, certificate {} added to aggregator, weight: {}", certificate.round(), certificate.digest(), self.weight);
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures quorum is only reached once.
             return Ok(Some(self.certificates.drain(..).collect()));

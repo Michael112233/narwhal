@@ -125,6 +125,10 @@ class Committee:
                 ips.add(self.ip(worker['transactions']))
 
         return list(ips)
+    
+    def client_rate(self, name):
+        ''' Returns the client rate for an authority. '''
+        return self.json['authorities'][name]['client']['rate']
 
     def remove_nodes(self, nodes):
         ''' remove the `nodes` last nodes from the committee. '''
@@ -197,12 +201,18 @@ class BenchParameters:
                 raise ConfigError('Missing or invalid number of nodes')
             self.nodes = [int(x) for x in nodes]
 
+            rate_type = json['rate_type']
+            if rate_type not in ['balanced', 'imbalanced']:
+                raise ConfigError('Invalid rate type')
+
             rate = json['rate']
             rate = rate if isinstance(rate, list) else [rate]
             if not rate:
                 raise ConfigError('Missing input rate')
             self.rate = [int(x) for x in rate]
 
+            # if rate_type == 'balanced':
+                
             
             self.workers = int(json['workers'])
 
