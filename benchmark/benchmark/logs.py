@@ -78,13 +78,26 @@ class LogParser:
         return merged
 
     def _parse_clients(self, log):
+        if not log or not log.strip():
+            raise ParseError('Client log is empty - process may not have started correctly')
+        
         if search(r'Error', log) is not None:
             raise ParseError('Client(s) panicked')
 
-        size = int(search(r'Transactions size: (\d+)', log).group(1))
-        rate = int(search(r'Transactions rate: (\d+)', log).group(1))
+        size_match = search(r'Transactions size: (\d+)', log)
+        if size_match is None:
+            raise ParseError(f'Could not find transaction size in client log. Log content: {log[:200]}')
+        size = int(size_match.group(1))
+        
+        rate_match = search(r'Transactions rate: (\d+)', log)
+        if rate_match is None:
+            raise ParseError(f'Could not find transaction rate in client log. Log content: {log[:200]}')
+        rate = int(rate_match.group(1))
 
-        tmp = search(r'\[(.*Z) .* Start ', log).group(1)
+        start_match = search(r'\[(.*Z) .* Start ', log)
+        if start_match is None:
+            raise ParseError(f'Could not find start time in client log. Log content: {log[:200]}')
+        tmp = start_match.group(1)
         start = self._to_posix(tmp)
 
         misses = len(findall(r'rate too high', log))
@@ -95,6 +108,9 @@ class LogParser:
         return size, rate, start, misses, samples
 
     def _parse_primaries(self, log):
+        if not log or not log.strip():
+            raise ParseError('Primary log is empty - process may not have started correctly')
+        
         if search(r'(?:panicked|Error)', log) is not None:
             raise ParseError('Primary(s) panicked')
 
@@ -106,35 +122,61 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
-        configs = {
-            'header_size': int(
-                search(r'Header size .* (\d+)', log).group(1)
-            ),
-            'max_header_delay': int(
-                search(r'Max header delay .* (\d+)', log).group(1)
-            ),
-            'gc_depth': int(
-                search(r'Garbage collection depth .* (\d+)', log).group(1)
-            ),
-            'sync_retry_delay': int(
-                search(r'Sync retry delay .* (\d+)', log).group(1)
-            ),
-            'sync_retry_nodes': int(
-                search(r'Sync retry nodes .* (\d+)', log).group(1)
-            ),
-            'batch_size': int(
-                search(r'Batch size .* (\d+)', log).group(1)
-            ),
-            'max_batch_delay': int(
-                search(r'Max batch delay .* (\d+)', log).group(1)
-            ),
-        }
+        # Try to extract configs, but handle missing values gracefully
+        configs = {}
+        header_size_match = search(r'Header size .* (\d+)', log)
+        if header_size_match:
+            configs['header_size'] = int(header_size_match.group(1))
+        else:
+            raise ParseError(f'Could not find header size in primary log. Log content: {log[:500]}')
+        
+        max_header_delay_match = search(r'Max header delay .* (\d+)', log)
+        if max_header_delay_match:
+            configs['max_header_delay'] = int(max_header_delay_match.group(1))
+        else:
+            raise ParseError(f'Could not find max header delay in primary log. Log content: {log[:500]}')
+        
+        gc_depth_match = search(r'Garbage collection depth .* (\d+)', log)
+        if gc_depth_match:
+            configs['gc_depth'] = int(gc_depth_match.group(1))
+        else:
+            raise ParseError(f'Could not find GC depth in primary log. Log content: {log[:500]}')
+        
+        sync_retry_delay_match = search(r'Sync retry delay .* (\d+)', log)
+        if sync_retry_delay_match:
+            configs['sync_retry_delay'] = int(sync_retry_delay_match.group(1))
+        else:
+            raise ParseError(f'Could not find sync retry delay in primary log. Log content: {log[:500]}')
+        
+        sync_retry_nodes_match = search(r'Sync retry nodes .* (\d+)', log)
+        if sync_retry_nodes_match:
+            configs['sync_retry_nodes'] = int(sync_retry_nodes_match.group(1))
+        else:
+            raise ParseError(f'Could not find sync retry nodes in primary log. Log content: {log[:500]}')
+        
+        batch_size_match = search(r'Batch size .* (\d+)', log)
+        if batch_size_match:
+            configs['batch_size'] = int(batch_size_match.group(1))
+        else:
+            raise ParseError(f'Could not find batch size in primary log. Log content: {log[:500]}')
+        
+        max_batch_delay_match = search(r'Max batch delay .* (\d+)', log)
+        if max_batch_delay_match:
+            configs['max_batch_delay'] = int(max_batch_delay_match.group(1))
+        else:
+            raise ParseError(f'Could not find max batch delay in primary log. Log content: {log[:500]}')
 
-        ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
+        ip_match = search(r'booted on (\d+.\d+.\d+.\d+)', log)
+        if ip_match is None:
+            raise ParseError(f'Could not find IP address in primary log. Log content: {log[:500]}')
+        ip = ip_match.group(1)
         
         return proposals, commits, configs, ip
 
     def _parse_workers(self, log):
+        if not log or not log.strip():
+            raise ParseError('Worker log is empty - process may not have started correctly')
+        
         if search(r'(?:panic|Error)', log) is not None:
             raise ParseError('Worker(s) panicked')
 
@@ -144,7 +186,10 @@ class LogParser:
         tmp = findall(r'Batch ([^ ]+) contains sample tx (\d+)', log)
         samples = {int(s): d for d, s in tmp}
 
-        ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
+        ip_match = search(r'booted on (\d+.\d+.\d+.\d+)', log)
+        if ip_match is None:
+            raise ParseError(f'Could not find IP address in worker log. Log content: {log[:500]}')
+        ip = ip_match.group(1)
 
         return sizes, samples, ip
 

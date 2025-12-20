@@ -96,14 +96,14 @@ def install(ctx):
 def remote(ctx, debug=False):
     ''' Run benchmarks on AWS '''
     bench_params = {
-        'faults': 3,
-        'nodes': 4,
+        'faults': 0,
+        'nodes': 10,
         'workers': 1,
         'collocate': True,
-        'rate': [10_000, 110_000],
+        'rate': 100_000,
         'tx_size': 512,
-        'duration': 300,
-        'runs': 2,
+        'duration': 20,
+        'runs': 1,
     }
     node_params = {
         'header_size': 1_000,  # bytes
@@ -182,11 +182,11 @@ def cloudlab_remote(ctx, debug=False):
         'nodes': [4],
         'workers': 1,
         'collocate': True,
-        'rate': [100_000, 150_000, 200_000, 250_000, 300_000, 350_000, 400_000, 450_000, 500_000, 550_000, 600_000],
+        'rate': [100_000],
         'tx_size': 512,
-        'duration': 300,
-        'runs': 3,
-        'trigger_attack': [True, False], 
+        'duration': 20,
+        'runs': 1,
+        'trigger_attack': [False], 
     }
     node_params = {
         'header_size': 1_000,  # bytes
@@ -208,6 +208,14 @@ def cloudlab_status(ctx):
     ''' Check if benchmark processes are running on CloudLab nodes '''
     try:
         CloudLabBench(ctx).status()
+    except BenchError as e:
+        Print.error(e)
+
+@task
+def cloudlab_debug(ctx):
+    ''' Debug: Check tmux sessions and capture error messages from CloudLab nodes '''
+    try:
+        CloudLabBench(ctx).debug_sessions()
     except BenchError as e:
         Print.error(e)
 

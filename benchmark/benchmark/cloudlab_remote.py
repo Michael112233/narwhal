@@ -6,6 +6,7 @@ This module provides functionality to run benchmarks on CloudLab nodes.
 """
 
 from collections import OrderedDict
+from pathlib import Path
 from fabric import Connection, ThreadingGroup as Group
 from fabric.exceptions import GroupException
 from paramiko import RSAKey
@@ -119,9 +120,9 @@ class CloudLabBench:
                         test_conn.open()
                         test_conn.close()
                         valid_hostnames.append(hostname)
-                        Print.info(f'  ✓ Successfully connected to {hostname}:{port}')
+                        Print.info(f'  [OK] Successfully connected to {hostname}:{port}')
                     except Exception as e:
-                        Print.warn(f'  ✗ Failed to connect to {hostname}:{port} - {e}')
+                        Print.warn(f'  [FAIL] Failed to connect to {hostname}:{port} - {e}')
                         Print.warn(f'    Skipping this host. Please check SSH connection manually.')
                 
                 # Now run on the valid hosts in the group
@@ -155,9 +156,9 @@ class CloudLabBench:
             (tmux ls 2>/dev/null || echo "  No tmux sessions") &&
             echo "---" &&
             echo "Running processes:" &&
-            (pgrep -f "node.*primary" > /dev/null && echo "  ✓ Primary: running" || echo "  ✗ Primary: not running") &&
-            (pgrep -f "node.*worker" > /dev/null && echo "  ✓ Worker: running" || echo "  ✗ Worker: not running") &&
-            (pgrep -f "benchmark_client" > /dev/null && echo "  ✓ Client: running" || echo "  ✗ Client: not running") &&
+            (pgrep -f "node.*primary" > /dev/null && echo "  [OK] Primary: running" || echo "  [FAIL] Primary: not running") &&
+            (pgrep -f "node.*worker" > /dev/null && echo "  [OK] Worker: running" || echo "  [FAIL] Worker: not running") &&
+            (pgrep -f "benchmark_client" > /dev/null && echo "  [OK] Client: running" || echo "  [FAIL] Client: not running") &&
             echo "---" &&
             echo "Process count:" &&
             echo "  Primary: $(pgrep -f 'node.*primary' | wc -l)" &&
@@ -234,6 +235,67 @@ class CloudLabBench:
             e = FabricError(e) if isinstance(e, GroupException) else e
             Print.warn(f'Some hosts failed to respond: {e}')
     
+    def debug_sessions(self, hosts=[]):
+        """Debug: Check tmux sessions and capture error messages"""
+        Print.heading('Debugging CloudLab nodes - checking tmux sessions...')
+        
+        host_info = self.manager.get_host_info()
+        repo_name = self.settings.repo_name
+        
+        debug_cmd = f'''
+            echo "=== Debugging $(hostname) ===" &&
+            echo "--- Tmux Sessions ---" &&
+            (tmux ls 2>/dev/null || echo "No tmux sessions") &&
+            echo "" &&
+            echo "--- Checking each session ---" &&
+            for session in $(tmux ls 2>/dev/null | cut -d: -f1); do
+                echo "Session: $session" &&
+                echo "  Pane content:" &&
+                tmux capture-pane -t "$session" -p 2>/dev/null | tail -10 || echo "    Could not capture" &&
+                echo "  Exit status:" &&
+                tmux list-panes -t "$session" -F "#{{pane_exit_status}}" 2>/dev/null || echo "    Unknown" &&
+                echo ""
+            done &&
+            echo "--- Log files in {repo_name}/logs ---" &&
+            (ls -lh {repo_name}/logs/*.log 2>/dev/null | head -5 || echo "No log files found") &&
+            echo "" &&
+            echo "--- Recent log content (first 20 lines) ---" &&
+            (head -20 {repo_name}/logs/*.log 2>/dev/null | head -40 || echo "No log content")
+        '''
+        
+        try:
+            if not hosts:
+                # Check all hosts
+                hosts_by_config = {}
+                for host in host_info:
+                    username = host.get('username', 'root')
+                    hostname = host['hostname']
+                    port = host.get('port', 22)
+                    key = (username, port)
+                    if key not in hosts_by_config:
+                        hosts_by_config[key] = []
+                    hosts_by_config[key].append(hostname)
+                
+                for (username, port), hostnames in hosts_by_config.items():
+                    conn_kwargs = self._get_connection_kwargs({})
+                    g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
+                    Print.info(f'Debugging {len(hostnames)} host(s) at {username}@{port}...')
+                    try:
+                        results = g.run(debug_cmd, hide=False)
+                        if isinstance(results, dict):
+                            for hostname, result in results.items():
+                                Print.info(f'\n--- {hostname} ---')
+                                if result.stdout:
+                                    print(result.stdout)
+                        else:
+                            if results.stdout:
+                                print(results.stdout)
+                    except Exception as e:
+                        Print.warn(f'Failed to debug: {e}')
+        except (GroupException, ExecutionError) as e:
+            e = FabricError(e) if isinstance(e, GroupException) else e
+            Print.warn(f'Some hosts failed to respond: {e}')
+    
     def kill(self, hosts=[], delete_logs=False):
         """Stop execution on specified hosts"""
         assert isinstance(hosts, list)
@@ -242,7 +304,20 @@ class CloudLabBench:
         host_info = self.manager.get_host_info()
         host_dict = {h['hostname']: h for h in host_info}
         delete_logs_cmd = CommandMaker.clean_logs() if delete_logs else 'true'
-        cmd = [delete_logs_cmd, f'({CommandMaker.kill()} || true)']
+        # Kill specific benchmark tmux sessions instead of killing the entire server
+        # This preserves other tmux sessions that might be running
+        kill_cmd = '''
+            # Kill specific benchmark sessions
+            for session in $(tmux ls 2>/dev/null | grep -E "^(primary-|worker-|client-)" | cut -d: -f1); do
+                tmux kill-session -t "$session" 2>/dev/null || true
+            done
+            # Kill any orphaned processes
+            pkill -9 -f "node.*primary" 2>/dev/null || true
+            pkill -9 -f "node.*worker" 2>/dev/null || true
+            pkill -9 -f "benchmark_client" 2>/dev/null || true
+            true
+        '''
+        cmd = [delete_logs_cmd, kill_cmd]
         
         try:
             if not hosts:
@@ -261,33 +336,38 @@ class CloudLabBench:
                 for (username, port), hostnames in hosts_by_config.items():
                     conn_kwargs = self._get_connection_kwargs({})
                     g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs)
-                    g.run(' && '.join(cmd), hide=True)
+                    # Use warn=True since pkill may not find processes
+                    g.run(' && '.join(cmd), hide=True, warn=True)
             else:
-                # Handle specific hosts
+                # Handle specific hosts (can be strings or dicts)
                 hosts_by_config = {}
                 for h in hosts:
-                    # Extract hostname from host string
-                    if '@' in h:
-                        username, hostname = h.split('@')
+                    # Handle both string and dict formats
+                    if isinstance(h, dict):
+                        hostname = h['hostname']
+                        username = h.get('username', 'root')
+                        port = h.get('port', 22)
                     else:
-                        hostname = h
-                        username = 'root'
+                    # Extract hostname from host string
+                        hostname = h.split('@')[1]
+                        username = h.split('@')[0]
+                        port = 22
+                        key = (username, port)
+                        if key not in hosts_by_config:
+                            hosts_by_config[key] = []
+                        hosts_by_config[key].append(hostname)
                     
-                    # Find host info
-                    host = host_dict.get(hostname, {})
-                    username = host.get('username', username)
-                    port = host.get('port', 22)
-                    key = (username, port)
-                    if key not in hosts_by_config:
-                        hosts_by_config[key] = []
-                    hosts_by_config[key].append(hostname)
+
                 
                 # Run on each group
                 for (username, port), hostnames in hosts_by_config.items():
                     conn_kwargs = self._get_connection_kwargs({})
                     g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs)
-                    g.run(' && '.join(cmd), hide=True)
+                    # Use warn=True since pkill may not find processes
+                    g.run(' && '.join(cmd), hide=True, warn=True)
         except GroupException as e:
+            # Don't fail if kill commands have errors - processes might not exist
+            Print.warn(f'Some kill commands failed (this is OK if processes don\'t exist): {e}')
             raise BenchError('Failed to kill nodes', FabricError(e))
     
     def _select_hosts(self, bench_parameters):
@@ -342,12 +422,20 @@ class CloudLabBench:
             for (username, port), hostnames in hosts_by_config.items():
                 conn_kwargs = self._get_connection_kwargs({})
                 g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
-                # Verify file exists and modify it
-                cmd = f'test -f {attack_rs_path} && {sed_cmd} && echo "Successfully modified {attack_rs_path}" || (echo "Error: {attack_rs_path} not found" && exit 1)'
-                g.run(cmd, hide=True)
+                # Check if repo directory exists first, then verify file exists and modify it
+                # If file doesn't exist, warn but don't fail (repo might not be cloned yet)
+                cmd = f'test -d {repo_name} && test -f {attack_rs_path} && ({sed_cmd} && echo "Successfully modified {attack_rs_path}") || (echo "Warning: {attack_rs_path} not found - repository may need to be installed first" && exit 0)'
+                result = g.run(cmd, hide=True, warn=True)
+                # Check if any host failed (but allow warnings)
+                if isinstance(result, dict):
+                    for hostname, res in result.items():
+                        if not res.ok and 'Warning' not in res.stdout:
+                            Print.warn(f'Failed to modify attack.rs on {hostname}: {res.stderr}')
+                elif not result.ok and 'Warning' not in result.stdout:
+                    Print.warn(f'Failed to modify attack.rs: {result.stderr}')
         except (GroupException, ExecutionError) as e:
-            e = FabricError(e) if isinstance(e, GroupException) else e
-            raise BenchError('Failed to modify attack.rs', e)
+            # Don't fail the entire benchmark if attack.rs modification fails
+            Print.warn(f'Could not modify attack.rs (this is OK if repository is not installed yet): {e}')
     
     def _update(self, hosts, collocate, trigger_attack=None):
         """Update code on all hosts"""
@@ -355,19 +443,24 @@ class CloudLabBench:
         repo_name = self.settings.repo_name
         branch = self.settings.branch
         
-        # Modify attack.rs if trigger_attack is specified
-        if trigger_attack is not None:
-            self._modify_attack_rs(hosts, trigger_attack)
-        
         cmd = [
-            f'cd {repo_name}',
+            f'cd {repo_name} || (echo "Repository {repo_name} not found. Please run: fab cloudlab-install" && exit 1)',
             'git fetch',
             f'git checkout {branch}',
             'git pull',
             # Source cargo environment before building
             'source $HOME/.cargo/env || export PATH=$HOME/.cargo/bin:$PATH',
-            'cargo build --release --features benchmark'
+            'cargo build --release --features benchmark',
+            # Create symlinks so ./node and ./benchmark_client work
+            # Remove any existing node directory or file first (node is also a crate directory)
+            f'rm -rf node benchmark_client 2>/dev/null ; {CommandMaker.alias_binaries("./target/release/")}'
         ]
+        
+        # Modify attack.rs AFTER updating the code (so the file exists)
+        # This ensures the repository is cloned and up-to-date first
+        if trigger_attack is not None:
+            # We'll modify attack.rs after git operations complete
+            pass
         
         try:
             # Group hosts by (username, port) to use Group efficiently
@@ -386,6 +479,12 @@ class CloudLabBench:
                 conn_kwargs = self._get_connection_kwargs({})
                 g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
                 g.run(' && '.join(cmd), hide=True)
+                
+                # Modify attack.rs AFTER git operations (so the file exists)
+                if trigger_attack is not None:
+                    # Create a subset of hosts for modification
+                    modify_hosts = [{'hostname': h, 'username': username, 'port': port} for h in hostnames]
+                    self._modify_attack_rs(modify_hosts, trigger_attack)
         except (GroupException, ExecutionError) as e:
             e = FabricError(e) if isinstance(e, GroupException) else e
             raise BenchError('Failed to update nodes', e)
@@ -394,13 +493,70 @@ class CloudLabBench:
         """Generate and upload configuration files"""
         Print.info('Generating configuration files...')
         
-        # Generate keys and committee
+        # Cleanup all local configuration files (same as remote.py)
+        cmd = CommandMaker.cleanup()
+        subprocess.run([cmd], shell=True, stderr=subprocess.DEVNULL)
+        
+        # Try to compile locally, but fall back to remote key generation if cargo is not available
         keys = []
-        for i in range(len(hosts)):
-            key_file = PathMaker.key_file(i)
-            key = Key.from_file(key_file) if key_file.exists() else Key()
-            key.to_file(key_file)
-            keys += [key]
+        key_files = [PathMaker.key_file(i) for i in range(len(hosts))]
+        local_compilation_success = False
+        
+        try:
+            # Recompile the latest code (same as remote.py)
+            cmd = CommandMaker.compile().split()
+            subprocess.run(cmd, check=True, cwd=PathMaker.node_crate_path())
+            local_compilation_success = True
+            
+            # Create alias for the client and nodes binary (same as remote.py)
+            cmd = CommandMaker.alias_binaries(PathMaker.binary_path())
+            subprocess.run([cmd], shell=True)
+            
+            # Generate keys locally
+            for filename in key_files:
+                cmd = CommandMaker.generate_key(filename).split()
+                subprocess.run(cmd, check=True)
+                keys += [Key.from_file(filename)]
+                
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            # If cargo is not available locally (e.g., on Windows), generate keys on remote nodes
+            Print.warn(f'Local compilation failed (this is OK if cargo is not available): {e}')
+            Print.info('Generating keys on remote nodes instead...')
+            
+            # Generate keys on the first remote host (they're the same for all)
+            repo_name = self.settings.repo_name
+            first_host = hosts[0]
+            username = first_host.get('username', 'root')
+            hostname = first_host['hostname']
+            port = first_host.get('port', 22)
+            conn_kwargs = self._get_connection_kwargs({})
+            
+            try:
+                conn = Connection(hostname, user=username, port=port, 
+                                 connect_kwargs=conn_kwargs, connect_timeout=30)
+                
+                # Generate keys on remote node (code should already be compiled from _update)
+                for i, key_file in enumerate(key_files):
+                    # Use absolute path for key file on remote
+                    remote_key_path = f'{repo_name}/{key_file}'
+                    # Generate key using the compiled node binary
+                    # The binary should exist after _update compiles the code
+                    cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_path}'
+                    result = conn.run(cmd, hide=True, warn=True)
+                    if not result.ok:
+                        # Try with target/release/node if ./node doesn't exist
+                        cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_path}'
+                        result = conn.run(cmd, hide=True)
+                    
+                    # Download the key file
+                    conn.get(remote_key_path, key_file)
+                
+                # Load all keys
+                for key_file in key_files:
+                    keys += [Key.from_file(key_file)]
+                    
+            except Exception as e:
+                raise BenchError('Failed to generate keys on remote nodes. Please ensure the code is compiled on remote nodes.', e)
         
         # Create addresses dict for Committee
         # Format: {name: [primary_host, worker1_host, worker2_host, ...]}
@@ -423,9 +579,9 @@ class CloudLabBench:
             addresses[key.name] = [hostname] + worker_hosts
         
         committee = Committee(addresses, self.settings.base_port)
-        committee.save(PathMaker.committee_file())
+        committee.print(PathMaker.committee_file())  # 改为 print() 而不是 save()
         
-        node_parameters.save(PathMaker.parameters_file())
+        node_parameters.print(PathMaker.parameters_file())  # 改为 print() 而不是 save()
         
         # Upload files to all hosts
         repo_name = self.settings.repo_name

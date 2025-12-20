@@ -63,4 +63,5 @@ class CommandMaker:
     def alias_binaries(origin):
         assert isinstance(origin, str)
         node, client = join(origin, 'node'), join(origin, 'benchmark_client')
-        return f'rm node ; rm benchmark_client ; ln -s {node} . ; ln -s {client} .'
+        # Use rm -rf to handle both files and directories (node is also a crate directory)
+        return f'rm -rf node benchmark_client 2>/dev/null ; ln -s {node} . ; ln -s {client} .'
