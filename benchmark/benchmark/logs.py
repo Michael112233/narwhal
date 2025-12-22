@@ -5,8 +5,9 @@ from multiprocessing import Pool
 from os.path import join
 from re import findall, search
 from statistics import mean
+import csv
 
-from benchmark.utils import Print
+from benchmark.utils import Print, PathMaker
 
 
 class ParseError(Exception):
@@ -67,6 +68,10 @@ class LogParser:
             Print.warn(
                 f'Clients missed their target rate {self.misses:,} time(s)'
             )
+        
+        # Store detailed latency data for CSV export
+        self.e2e_latency_details = None
+        self.system_start_time = None
 
     def _merge_results(self, input):
         # Keep the earliest timestamp.
@@ -223,14 +228,74 @@ class LogParser:
 
     def _end_to_end_latency(self):
         latency = []
+        latency_details = []  # Store detailed data: (tx_id, start_time, end_time, latency, end_time_relative)
+        
+        # Calculate system start time (earliest start time from all clients)
+        if not self.start:
+            return 0, []
+        system_start_time = min(self.start)
+        self.system_start_time = system_start_time
+        
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
                 if batch_id in self.commits:
                     assert tx_id in sent  # We receive txs that we sent.
                     start = sent[tx_id]
                     end = self.commits[batch_id]
-                    latency += [end-start]
-        return mean(latency) if latency else 0
+                    lat = end - start
+                    latency += [lat]
+                    # Store relative end time (relative to system start)
+                    end_time_relative = end - system_start_time
+                    latency_details.append({
+                        'tx_id': tx_id,
+                        'start_time': start,
+                        'end_time': end,
+                        'latency': lat,
+                        'end_time_relative': end_time_relative
+                    })
+        
+        # Sort by end_time_relative for chronological order
+        latency_details.sort(key=lambda x: x['end_time_relative'])
+        self.e2e_latency_details = latency_details
+        
+        return mean(latency) if latency else 0, latency_details
+
+    def export_latency_csv(self, filename=None):
+        """Export end-to-end latency details to CSV file"""
+        if not self.e2e_latency_details:
+            Print.warn('No latency details available to export')
+            return None
+        
+        if filename is None:
+            # Generate default filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            results_dir = PathMaker.results_path()
+            filename = join(results_dir, f'e2e_latency_{timestamp}.csv')
+        
+        # Ensure directory exists
+        import os
+        os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else '.', exist_ok=True)
+        
+        try:
+            with open(filename, 'w', newline='') as csvfile:
+                fieldnames = ['tx_id', 'start_time', 'end_time', 'latency_ms', 'end_time_relative_sec']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                
+                writer.writeheader()
+                for detail in self.e2e_latency_details:
+                    writer.writerow({
+                        'tx_id': detail['tx_id'],
+                        'start_time': detail['start_time'],
+                        'end_time': detail['end_time'],
+                        'latency_ms': detail['latency'] * 1_000,  # Convert to milliseconds
+                        'end_time_relative_sec': detail['end_time_relative']
+                    })
+            
+            Print.info(f'Latency details exported to: {filename}')
+            return filename
+        except Exception as e:
+            Print.warn(f'Failed to export latency CSV: {e}')
+            return None
 
     def result(self):
         header_size = self.configs[0]['header_size']
@@ -244,7 +309,8 @@ class LogParser:
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
-        end_to_end_latency = self._end_to_end_latency() * 1_000
+        end_to_end_latency, _ = self._end_to_end_latency()
+        end_to_end_latency = end_to_end_latency * 1_000
 
         return (
             '\n'
