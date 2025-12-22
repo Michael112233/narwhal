@@ -166,6 +166,15 @@ def cloudlab_info(ctx):
 
 
 @task
+def cloudlab_test(ctx):
+    ''' Test SSH connections to all CloudLab nodes '''
+    try:
+        CloudLabBench(ctx).test_connections()
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
 def cloudlab_install(ctx):
     ''' Install the codebase on all CloudLab nodes '''
     try:

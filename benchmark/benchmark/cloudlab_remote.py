@@ -16,6 +16,7 @@ from math import ceil
 from copy import deepcopy
 import subprocess
 import re
+import shlex
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker
@@ -71,6 +72,79 @@ class CloudLabBench:
         kwargs.pop('timeout', None)
         kwargs.pop('connect_timeout', None)
         return kwargs
+    
+    def test_connections(self):
+        """Test SSH connections to all CloudLab nodes"""
+        Print.heading('Testing connections to CloudLab nodes...')
+        
+        host_info = self.manager.get_host_info()
+        conn_kwargs = self._get_connection_kwargs({})
+        
+        results = {
+            'success': [],
+            'failed': []
+        }
+        
+        for host in host_info:
+            username = host.get('username', 'root')
+            hostname = host['hostname']
+            port = host.get('port', 22)
+            region = host.get('region', 'default')
+            
+            Print.info(f'Testing {username}@{hostname}:{port} ({region})...')
+            
+            try:
+                # Test basic connection
+                test_conn = Connection(
+                    hostname, 
+                    user=username, 
+                    port=port, 
+                    connect_kwargs=conn_kwargs, 
+                    connect_timeout=10
+                )
+                test_conn.open()
+                
+                # Test basic command execution
+                result = test_conn.run('echo "Connection test successful" && hostname && uname -a', hide=True)
+                test_conn.close()
+                
+                # Parse output
+                output_lines = result.stdout.strip().split('\n')
+                hostname_line = output_lines[1] if len(output_lines) > 1 else "N/A"
+                system_line = output_lines[-1] if len(output_lines) > 0 else result.stdout.strip()
+                
+                Print.info(f'  ✓ Connected successfully')
+                Print.info(f'    Hostname: {hostname_line}')
+                Print.info(f'    System: {system_line}')
+                
+                results['success'].append({
+                    'hostname': hostname,
+                    'username': username,
+                    'port': port,
+                    'region': region
+                })
+            except Exception as e:
+                Print.warn(f'  ✗ Connection failed: {e}')
+                results['failed'].append({
+                    'hostname': hostname,
+                    'username': username,
+                    'port': port,
+                    'region': region,
+                    'error': str(e)
+                })
+        
+        # Print summary
+        Print.heading('\nConnection Test Summary')
+        Print.info(f'  Successful: {len(results["success"])}/{len(host_info)}')
+        Print.info(f'  Failed: {len(results["failed"])}/{len(host_info)}')
+        
+        if results['failed']:
+            Print.warn('\nFailed connections:')
+            for failed in results['failed']:
+                Print.warn(f'  - {failed["username"]}@{failed["hostname"]}:{failed["port"]} ({failed["region"]})')
+                Print.warn(f'    Error: {failed["error"]}')
+        
+        return results
     
     def install(self):
         """Install Rust and clone the repo on all CloudLab nodes"""
@@ -152,9 +226,6 @@ class CloudLabBench:
             echo "=== Node Status ===" && 
             echo "Hostname: $(hostname)" &&
             echo "---" &&
-            echo "Tmux sessions:" &&
-            (tmux ls 2>/dev/null || echo "  No tmux sessions") &&
-            echo "---" &&
             echo "Running processes:" &&
             (pgrep -f "node.*primary" > /dev/null && echo "  [OK] Primary: running" || echo "  [FAIL] Primary: not running") &&
             (pgrep -f "node.*worker" > /dev/null && echo "  [OK] Worker: running" || echo "  [FAIL] Worker: not running") &&
@@ -163,7 +234,12 @@ class CloudLabBench:
             echo "Process count:" &&
             echo "  Primary: $(pgrep -f 'node.*primary' | wc -l)" &&
             echo "  Worker: $(pgrep -f 'node.*worker' | wc -l)" &&
-            echo "  Client: $(pgrep -f 'benchmark_client' | wc -l)"
+            echo "  Client: $(pgrep -f 'benchmark_client' | wc -l)" &&
+            echo "---" &&
+            echo "Process details:" &&
+            (pgrep -f "node.*primary" | xargs ps -p 2>/dev/null | tail -n +2 || echo "  No primary processes") &&
+            (pgrep -f "node.*worker" | xargs ps -p 2>/dev/null | tail -n +2 || echo "  No worker processes") &&
+            (pgrep -f "benchmark_client" | xargs ps -p 2>/dev/null | tail -n +2 || echo "  No client processes")
         '''
         
         try:
@@ -244,23 +320,27 @@ class CloudLabBench:
         
         debug_cmd = f'''
             echo "=== Debugging $(hostname) ===" &&
-            echo "--- Tmux Sessions ---" &&
-            (tmux ls 2>/dev/null || echo "No tmux sessions") &&
+            echo "--- Running Processes ---" &&
+            echo "Primary processes:" &&
+            (pgrep -f "node.*primary" | xargs ps -fp 2>/dev/null || echo "  No primary processes") &&
             echo "" &&
-            echo "--- Checking each session ---" &&
-            for session in $(tmux ls 2>/dev/null | cut -d: -f1); do
-                echo "Session: $session" &&
-                echo "  Pane content:" &&
-                tmux capture-pane -t "$session" -p 2>/dev/null | tail -10 || echo "    Could not capture" &&
-                echo "  Exit status:" &&
-                tmux list-panes -t "$session" -F "#{{pane_exit_status}}" 2>/dev/null || echo "    Unknown" &&
-                echo ""
-            done &&
+            echo "Worker processes:" &&
+            (pgrep -f "node.*worker" | xargs ps -fp 2>/dev/null || echo "  No worker processes") &&
+            echo "" &&
+            echo "Client processes:" &&
+            (pgrep -f "benchmark_client" | xargs ps -fp 2>/dev/null || echo "  No client processes") &&
+            echo "" &&
             echo "--- Log files in {repo_name}/logs ---" &&
-            (ls -lh {repo_name}/logs/*.log 2>/dev/null | head -5 || echo "No log files found") &&
+            (ls -lh {repo_name}/logs/*.log 2>/dev/null | head -10 || echo "No log files found") &&
             echo "" &&
-            echo "--- Recent log content (first 20 lines) ---" &&
-            (head -20 {repo_name}/logs/*.log 2>/dev/null | head -40 || echo "No log content")
+            echo "--- Recent log content (last 30 lines of each) ---" &&
+            for log in {repo_name}/logs/*.log; do
+                if [ -f "$log" ]; then
+                    echo "=== $(basename $log) ===" &&
+                    tail -30 "$log" 2>/dev/null || echo "  Could not read log" &&
+                    echo ""
+                fi
+            done
         '''
         
         try:
@@ -296,7 +376,88 @@ class CloudLabBench:
             e = FabricError(e) if isinstance(e, GroupException) else e
             Print.warn(f'Some hosts failed to respond: {e}')
     
-    def kill(self, hosts=[], delete_logs=False):
+    def _kill_ports_on_host(self, conn, ports):
+        """Kill processes using specific ports on a host"""
+        if not ports:
+            return
+        
+        # Create a command to kill processes using these ports
+        # Use lsof or fuser to find processes, then kill them
+        port_list = ' '.join(str(p) for p in sorted(ports))
+        kill_ports_cmd = f'''
+            # Kill processes using specified ports
+            for port in {port_list}; do
+                # Try using lsof first (more common)
+                if command -v lsof >/dev/null 2>&1; then
+                    lsof -ti:$port 2>/dev/null | xargs kill -9 2>/dev/null || true
+                # Fallback to fuser
+                elif command -v fuser >/dev/null 2>&1; then
+                    fuser -k $port/tcp 2>/dev/null || true
+                # Last resort: use ss/netstat to find PIDs
+                elif command -v ss >/dev/null 2>&1; then
+                    ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\\K[0-9]+' | xargs kill -9 2>/dev/null || true
+                elif command -v netstat >/dev/null 2>&1; then
+                    netstat -tlnp 2>/dev/null | grep ":$port " | awk '{{print $7}}' | cut -d'/' -f1 | xargs kill -9 2>/dev/null || true
+                fi
+            done
+            true
+        '''
+        try:
+            conn.run(kill_ports_cmd, hide=True, warn=True, shell='/bin/bash')
+        except:
+            pass  # Ignore errors in port killing
+    
+    def _get_ports_from_committee(self, committee, faults):
+        """Extract all ports that will be used by the committee"""
+        ports_by_host = {}  # {hostname: set of ports}
+        host_info = self.manager.get_host_info()
+        
+        # Create a mapping from IP to hostname
+        ip_to_hostname = {}
+        for host in host_info:
+            hostname = host['hostname']
+            # Try to resolve hostname to IP
+            try:
+                import socket
+                ip = socket.gethostbyname(hostname)
+                ip_to_hostname[ip] = hostname
+                # Also map hostname itself in case it's already an IP
+                ip_to_hostname[hostname] = hostname
+            except:
+                # If resolution fails, use hostname as-is
+                ip_to_hostname[hostname] = hostname
+        
+        # Extract all addresses from committee JSON structure
+        # Skip faulty nodes
+        authorities = list(committee.json['authorities'].items())
+        if faults > 0:
+            authorities = authorities[:-faults]
+        
+        for name, authority in authorities:
+            # Primary addresses
+            primary = authority['primary']
+            for addr_type, address in primary.items():
+                ip, port = address.rsplit(':', 1)
+                port = int(port)
+                hostname = ip_to_hostname.get(ip, ip)
+                if hostname not in ports_by_host:
+                    ports_by_host[hostname] = set()
+                ports_by_host[hostname].add(port)
+            
+            # Worker addresses
+            workers = authority['workers']
+            for worker_id, worker in workers.items():
+                for addr_type, address in worker.items():
+                    ip, port = address.rsplit(':', 1)
+                    port = int(port)
+                    hostname = ip_to_hostname.get(ip, ip)
+                    if hostname not in ports_by_host:
+                        ports_by_host[hostname] = set()
+                    ports_by_host[hostname].add(port)
+        
+        return ports_by_host
+    
+    def kill(self, hosts=[], delete_logs=False, committee=None, faults=0):
         """Stop execution on specified hosts"""
         assert isinstance(hosts, list)
         assert isinstance(delete_logs, bool)
@@ -304,20 +465,25 @@ class CloudLabBench:
         host_info = self.manager.get_host_info()
         host_dict = {h['hostname']: h for h in host_info}
         delete_logs_cmd = CommandMaker.clean_logs() if delete_logs else 'true'
-        # Kill specific benchmark tmux sessions instead of killing the entire server
-        # This preserves other tmux sessions that might be running
+        # Kill benchmark processes by pattern matching
+        # This will kill all processes matching the benchmark patterns
         kill_cmd = '''
-            # Kill specific benchmark sessions
-            for session in $(tmux ls 2>/dev/null | grep -E "^(primary-|worker-|client-)" | cut -d: -f1); do
-                tmux kill-session -t "$session" 2>/dev/null || true
-            done
-            # Kill any orphaned processes
+            # Kill any running benchmark processes
             pkill -9 -f "node.*primary" 2>/dev/null || true
             pkill -9 -f "node.*worker" 2>/dev/null || true
             pkill -9 -f "benchmark_client" 2>/dev/null || true
+            # Also kill any wrapper scripts that might still be running
+            pkill -9 -f "/tmp/run_(primary|worker|client)-" 2>/dev/null || true
             true
         '''
-        cmd = [delete_logs_cmd, kill_cmd]
+        # Cleanup database directories and lock files
+        cleanup_db_cmd = 'rm -rf .db-* 2>/dev/null || true'
+        cmd = [delete_logs_cmd, kill_cmd, cleanup_db_cmd]
+        
+        # If committee is provided, also kill processes using the ports
+        ports_by_host = {}
+        if committee is not None:
+            ports_by_host = self._get_ports_from_committee(committee, faults)
         
         try:
             if not hosts:
@@ -338,6 +504,15 @@ class CloudLabBench:
                     g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs)
                     # Use warn=True since pkill may not find processes
                     g.run(' && '.join(cmd), hide=True, warn=True)
+                    
+                    # Kill processes using committee ports on these hosts
+                    if ports_by_host:
+                        for hostname in hostnames:
+                            if hostname in ports_by_host:
+                                ports = ports_by_host[hostname]
+                                if ports:
+                                    conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs)
+                                    self._kill_ports_on_host(conn, ports)
             else:
                 # Handle specific hosts (can be strings or dicts)
                 hosts_by_config = {}
@@ -348,16 +523,14 @@ class CloudLabBench:
                         username = h.get('username', 'root')
                         port = h.get('port', 22)
                     else:
-                    # Extract hostname from host string
+                        # Extract hostname from host string
                         hostname = h.split('@')[1]
                         username = h.split('@')[0]
                         port = 22
-                        key = (username, port)
-                        if key not in hosts_by_config:
-                            hosts_by_config[key] = []
-                        hosts_by_config[key].append(hostname)
-                    
-
+                    key = (username, port)
+                    if key not in hosts_by_config:
+                        hosts_by_config[key] = []
+                    hosts_by_config[key].append(hostname)
                 
                 # Run on each group
                 for (username, port), hostnames in hosts_by_config.items():
@@ -365,6 +538,15 @@ class CloudLabBench:
                     g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs)
                     # Use warn=True since pkill may not find processes
                     g.run(' && '.join(cmd), hide=True, warn=True)
+                    
+                    # Kill processes using committee ports on these hosts
+                    if ports_by_host:
+                        for hostname in hostnames:
+                            if hostname in ports_by_host:
+                                ports = ports_by_host[hostname]
+                                if ports:
+                                    conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs)
+                                    self._kill_ports_on_host(conn, ports)
         except GroupException as e:
             # Don't fail if kill commands have errors - processes might not exist
             Print.warn(f'Some kill commands failed (this is OK if processes don\'t exist): {e}')
@@ -616,62 +798,98 @@ class CloudLabBench:
         Print.info('Downloading logs...')
         
         # Create local logs directory
-        PathMaker.logs_path().mkdir(parents=True, exist_ok=True)
+        Path(PathMaker.logs_path()).mkdir(parents=True, exist_ok=True)
         
         # Download logs from each host
         repo_name = self.settings.repo_name
         host_info = self.manager.get_host_info()
+        total_hosts = len(host_info)
+        downloaded_hosts = 0
         
-        for i, host in enumerate(host_info):
+        for idx, host in enumerate(host_info):
             hostname = host['hostname']
             username = host.get('username', 'root')
             port = host.get('port', 22)
             conn_kwargs = self._get_connection_kwargs({})
             
+            host_num = idx + 1
+            Print.info(f'Downloading logs from host {host_num}/{total_hosts}: {username}@{hostname}:{port}')
+            
+            primary_ok = 0
+            worker_ok = 0
+            client_ok = 0
+            
             try:
                 conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs)
                 
                 # Download primary logs
-                remote_log = f'{repo_name}/{PathMaker.primary_log_file(i)}'
-                local_log = PathMaker.primary_log_file(i)
+                remote_log = f'{repo_name}/{PathMaker.primary_log_file(idx)}'
+                local_log = PathMaker.primary_log_file(idx)
+                Path(local_log).parent.mkdir(parents=True, exist_ok=True)
                 try:
                     conn.get(remote_log, str(local_log))
-                except:
-                    pass  # Log file might not exist
+                    primary_ok += 1
+                    Print.info(f'  ✓ primary-{idx}.log downloaded')
+                except Exception:
+                    Print.warn(f'  ⚠ primary-{idx}.log not found on {hostname}')
                 
-                # Download worker logs
-                for j in range(committee.workers()):
-                    remote_log = f'{repo_name}/{PathMaker.worker_log_file(i, j)}'
-                    local_log = PathMaker.worker_log_file(i, j)
-                    try:
-                        conn.get(remote_log, str(local_log))
-                    except:
-                        pass
+                # Download worker logs - iterate through all workers for this authority
+                # Get workers_addresses to know which worker IDs exist
+                workers_addresses = committee.workers_addresses(faults)
+                if idx < len(workers_addresses):
+                    for (worker_id, address) in workers_addresses[idx]:
+                        # Convert worker_id to int if it's a string
+                        worker_id_int = int(worker_id) if isinstance(worker_id, str) else worker_id
+                        remote_log = f'{repo_name}/{PathMaker.worker_log_file(idx, worker_id_int)}'
+                        local_log = PathMaker.worker_log_file(idx, worker_id_int)
+                        Path(local_log).parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            conn.get(remote_log, str(local_log))
+                            worker_ok += 1
+                            Print.info(f'  ✓ worker-{idx}-{worker_id_int}.log downloaded')
+                        except Exception:
+                            # Worker logs may legitimately not exist for some configs
+                            Print.warn(f'  ⚠ worker-{idx}-{worker_id_int}.log not found on {hostname}')
                 
-                # Download client logs
-                remote_log = f'{repo_name}/{PathMaker.client_log_file(i, 0)}'
-                local_log = PathMaker.client_log_file(i, 0)
-                try:
-                    conn.get(remote_log, str(local_log))
-                except:
-                    pass
+                # Download client logs - iterate through all clients for this authority
+                # Clients correspond to workers, so use the same worker IDs
+                if idx < len(workers_addresses):
+                    for (worker_id, address) in workers_addresses[idx]:
+                        # Convert worker_id to int if it's a string
+                        worker_id_int = int(worker_id) if isinstance(worker_id, str) else worker_id
+                        remote_log = f'{repo_name}/{PathMaker.client_log_file(idx, worker_id_int)}'
+                        local_log = PathMaker.client_log_file(idx, worker_id_int)
+                        Path(local_log).parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            conn.get(remote_log, str(local_log))
+                            client_ok += 1
+                            Print.info(f'  ✓ client-{idx}-{worker_id_int}.log downloaded')
+                        except Exception:
+                            Print.warn(f'  ⚠ client-{idx}-{worker_id_int}.log not found on {hostname}')
+                
+                downloaded_hosts += 1
+                Print.info(
+                    f'  Host {host_num}/{total_hosts} summary: '
+                    f'primary={primary_ok}, workers={worker_ok}, clients={client_ok}'
+                )
             except Exception as e:
-                Print.warn(f'Failed to download logs from {hostname}: {e}')
+                Print.warn(f'  ✗ Failed to download logs from {hostname}: {e}')
+        
+        Print.info(
+            f'Log download finished: {downloaded_hosts}/{total_hosts} hosts processed successfully'
+        )
         
         return LogParser.process(PathMaker.logs_path(), faults=faults)
     
     def _background_run(self, host_info, command, log_file):
-        """Run a command in the background using tmux on a remote host"""
-        from os.path import basename, splitext
+        """Run a command in the background using nohup on a remote host"""
+        from os.path import basename, splitext, dirname
         name = splitext(basename(log_file))[0]
         repo_name = self.settings.repo_name
+        # remote_log is the full path from repo root
         remote_log = f'{repo_name}/{log_file}'
-        
-        # Ensure log directory exists and change to repo directory
-        # The command should be executed in the repo directory where binaries are located
-        log_dir = f'{repo_name}/$(dirname {log_file})'
-        full_cmd = f'cd {repo_name} && mkdir -p {log_dir} && {command} 2>&1 | tee {remote_log}'
-        cmd = f'tmux new -d -s "{name}" "bash -c \\"{full_cmd}\\""'
+        # log_file_relative is the path relative to repo directory (after cd)
+        log_file_relative = log_file
         
         username = host_info.get('username', 'root')
         hostname = host_info['hostname']
@@ -687,17 +905,139 @@ class CloudLabBench:
             if 'Binaries missing' in test_result.stdout:
                 Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}')
             
-            # Now start the process
-            output = c.run(cmd, hide=True)
-            self._check_stderr(output)
+            # Ensure log directory exists
+            from os.path import dirname
+            log_dir = f'{repo_name}/{dirname(log_file)}' if dirname(log_file) else repo_name
+            c.run(f'mkdir -p {log_dir}', hide=True)
             
-            # Verify tmux session was created
-            verify_cmd = f'tmux has-session -t "{name}" 2>/dev/null && echo "Session exists" || echo "Session missing"'
-            verify_result = c.run(verify_cmd, hide=True)
-            if 'Session exists' in verify_result.stdout:
-                Print.info(f'  ✓ {name} started on {hostname} (tmux session: {name})')
+            # Create a wrapper script that will run the command
+            # The script will handle logging and ensure the process stays running
+            script_path = f'/tmp/run_{name}.sh'
+            
+            # Extract store path from command for cleanup
+            store_match = re.search(r'--store\s+(\S+)', command)
+            store_path = store_match.group(1) if store_match else None
+            
+            # Write script with better error handling
+            # Use relative path after cd to repo directory
+            # log_file is already relative (e.g., "logs/client-0-0.log")
+            cleanup_store = f'rm -rf {store_path} 2>/dev/null || true' if store_path else ''
+            script_cmd = f'''cat > {script_path} << 'SCRIPTEOF'
+#!/bin/bash
+# Change to repo directory first
+cd {repo_name} || {{
+    echo "ERROR: Failed to cd to {repo_name}"
+    echo "Current directory: $(pwd)"
+    exit 1
+}}
+
+# Ensure log directory exists (relative to repo directory)
+mkdir -p $(dirname {log_file}) 2>/dev/null || true
+
+# Cleanup database directory and lock files before starting
+{cleanup_store}
+
+# Check if binary exists (for client/worker/primary)
+if [[ "{name}" == client-* ]]; then
+    if [ ! -f "./benchmark_client" ] && [ ! -f "./target/release/benchmark_client" ]; then
+        echo "ERROR: benchmark_client not found" | tee {log_file}
+        echo "Looking in: $(pwd)" | tee -a {log_file}
+        echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
+        exit 1
+    fi
+elif [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
+    if [ ! -f "./node" ] && [ ! -f "./target/release/node" ]; then
+        echo "ERROR: node binary not found" | tee {log_file}
+        echo "Looking in: $(pwd)" | tee -a {log_file}
+        echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
+        exit 1
+    fi
+fi
+
+# Open log file and redirect stdout/stderr to it BEFORE exec
+# This ensures the file is created and opened before the process starts
+# Use relative path since we're already in the repo directory
+exec > {log_file} 2>&1
+
+# Execute the command
+# Use exec to replace shell with the actual process
+exec {command}
+SCRIPTEOF'''
+            script_write_result = c.run(script_cmd, hide=True, warn=True)
+            if not script_write_result.ok:
+                Print.error(f'  ✗ Failed to create script: {script_write_result.stderr}')
+                raise BenchError(f'Failed to create script for {name} on {hostname}')
+            
+            chmod_result = c.run(f'chmod +x {script_path}', hide=True, warn=True)
+            if not chmod_result.ok:
+                Print.error(f'  ✗ Failed to make script executable: {chmod_result.stderr}')
+                raise BenchError(f'Failed to make script executable for {name} on {hostname}')
+            
+            # Verify script was created correctly
+            verify_script = c.run(f'test -f {script_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
+            if 'FAIL' in verify_script.stdout:
+                Print.error(f'  ✗ Script file {script_path} was not created')
+                raise BenchError(f'Script file not created for {name} on {hostname}')
+            
+            # Use nohup to run the script in background
+            # Use setsid to create a new session and detach from terminal
+            # Redirect all output to /dev/null since script handles its own logging
+            nohup_cmd = f'setsid nohup bash {script_path} </dev/null >/dev/null 2>&1 & echo $!'
+            nohup_result = c.run(nohup_cmd, hide=True, warn=True)
+            
+            if not nohup_result.ok:
+                Print.error(f'  ✗ Failed to start {name}: {nohup_result.stderr}')
+                raise BenchError(f'Failed to start {name} on {hostname}')
+            
+            pid = nohup_result.stdout.strip()
+            if not pid or not pid.isdigit():
+                Print.error(f'  ✗ Failed to get PID for {name}')
+                raise BenchError(f'Failed to start {name} on {hostname}')
+            
+            Print.info(f'  ✓ {name} started on {hostname} (PID: {pid})')
+            
+            # Wait a bit and verify the process is actually running
+            sleep(1.0)
+            check_cmd = f'ps -p {pid} >/dev/null 2>&1 && echo "Running" || echo "Not running"'
+            check_result = c.run(check_cmd, hide=True, warn=True)
+            
+            if 'Not running' in check_result.stdout:
+                # Process exited, check the log for errors
+                Print.warn(f'  ⚠ Process {pid} exited immediately, checking logs...')
+                
+                # Check if script exists and can be read
+                script_check = c.run(f'test -f {script_path} && cat {script_path} || echo "Script not found"', hide=True, warn=True)
+                if 'Script not found' not in script_check.stdout:
+                    Print.warn(f'  Script content:\n{script_check.stdout}')
+                
+                # Check script execution directly to see what happens
+                test_exec = c.run(f'bash -x {script_path} 2>&1 | head -20 || true', hide=True, warn=True)
+                if test_exec.stdout:
+                    Print.warn(f'  Script execution test:\n{test_exec.stdout}')
+                
+                # Check log file
+                log_check = c.run(f'test -f {remote_log} && tail -30 {remote_log} || echo "Log file not found"', hide=True, warn=True)
+                if 'Log file not found' not in log_check.stdout:
+                    Print.warn(f'  Last log lines:\n{log_check.stdout}')
+                else:
+                    Print.warn(f'  Log file {remote_log} not created')
+                    # Try to check if directory exists
+                    from os.path import dirname as os_dirname
+                    log_dir_check = f'{repo_name}/{os_dirname(log_file)}' if os_dirname(log_file) else repo_name
+                    dir_check = c.run(f'test -d {log_dir_check} && echo "Dir exists" || echo "Dir missing"', hide=True, warn=True)
+                    Print.warn(f'  Log directory check: {dir_check.stdout}')
+                
+                # Check if command/binary exists
+                binary_check = c.run(f'cd {repo_name} && which benchmark_client 2>/dev/null || which ./benchmark_client 2>/dev/null || echo "Binary not found"', hide=True, warn=True)
+                if 'Binary not found' not in binary_check.stdout:
+                    Print.warn(f'  Binary location: {binary_check.stdout}')
+                else:
+                    Print.warn(f'  ⚠ benchmark_client binary not found in PATH or current directory')
+                
+                # Don't raise error - let it continue, but provide detailed diagnostics
             else:
-                Print.warn(f'  ⚠ {name} command executed but tmux session not found on {hostname}')
+                Print.info(f'  ✓ Process {pid} is running')
+                
         except Exception as e:
             Print.error(f'  ✗ Failed to start {name} on {hostname}: {e}')
             raise
@@ -741,22 +1081,25 @@ class CloudLabBench:
         return None
     
     def _run_single(self, rate, committee, bench_parameters, selected_hosts, debug=False):
-        """Run a single benchmark iteration"""
+        """Run a single benchmark iteration (CloudLab), mirroring logic from Bench._run_single"""
         from math import ceil
         from time import sleep
-        
+
         faults = bench_parameters.faults
-        
-        Print.info('Killing any existing processes...')
-        # Kill any potentially unfinished run and delete logs
-        self.kill(hosts=selected_hosts, delete_logs=True)
-        
-        # Small delay to ensure processes are killed
-        sleep(2)
-        
-        # Run the clients (they will wait for the nodes to be ready)
-        Print.info('Booting clients...')
+
+        # 1. Kill any potentially unfinished run and delete logs (same intent as Bench._run_single)
+        Print.info('Killing any existing processes and ports...')
+        self.kill(hosts=selected_hosts, delete_logs=True, committee=committee, faults=faults)
+
+        # Small delay to ensure processes are killed and database cleanup completes
+        sleep(3)
+
+        # Pre-compute workers' addresses (filtered for faults) – same as Bench._run_single
         workers_addresses = committee.workers_addresses(faults)
+
+        # 2. Run the clients first (they will wait for the nodes to be ready)
+        #    This mirrors benchmark/benchmark/remote.py::_run_single
+        Print.info('Booting clients...')
         rate_share = ceil(rate / committee.workers())
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
@@ -764,7 +1107,7 @@ class CloudLabBench:
                 if not host_info:
                     Print.warn(f'Could not find host for address {address}')
                     continue
-                
+
                 cmd = CommandMaker.run_client(
                     address,
                     bench_parameters.tx_size,
@@ -773,27 +1116,26 @@ class CloudLabBench:
                 )
                 log_file = PathMaker.client_log_file(i, id)
                 self._background_run(host_info, cmd, log_file)
-        
-        # Run the primaries (except the faulty ones)
+
+        # 3. Run the primaries (except the faulty ones) – same order as Bench._run_single
         Print.info('Booting primaries...')
         for i, address in enumerate(committee.primary_addresses(faults)):
             host_info = self._get_host_by_address(address, selected_hosts)
             if not host_info:
                 Print.warn(f'Could not find host for address {address}')
                 continue
-            
-            # Use relative paths since we'll cd into repo directory in _background_run
+
             cmd = CommandMaker.run_primary(
                 PathMaker.key_file(i),
-                '.committee.json',
+                PathMaker.committee_file(),
                 PathMaker.db_path(i),
-                '.parameters.json',
+                PathMaker.parameters_file(),
                 debug=debug
             )
             log_file = PathMaker.primary_log_file(i)
             self._background_run(host_info, cmd, log_file)
-        
-        # Run the workers (except the faulty ones)
+
+        # 4. Run the workers (except the faulty ones) – same as Bench._run_single
         Print.info('Booting workers...')
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
@@ -801,28 +1143,27 @@ class CloudLabBench:
                 if not host_info:
                     Print.warn(f'Could not find host for address {address}')
                     continue
-                
-                repo_name = self.settings.repo_name
-                # Use relative paths since we'll cd into repo directory
+
                 cmd = CommandMaker.run_worker(
                     PathMaker.key_file(i),
-                    '.committee.json',
+                    PathMaker.committee_file(),
                     PathMaker.db_path(i, id),
-                    '.parameters.json',
-                    id,  # The worker's id
+                    PathMaker.parameters_file(),
+                    id,  # The worker's id.
                     debug=debug
                 )
                 log_file = PathMaker.worker_log_file(i, id)
                 self._background_run(host_info, cmd, log_file)
-        
-        # Wait for all transactions to be processed
+
+        # 5. Wait for all transactions to be processed (progress output)
         duration = bench_parameters.duration
         Print.info(f'Running benchmark ({duration} sec)...')
         for i in range(20):
             sleep(ceil(duration / 20))
             if (i + 1) % 5 == 0:
                 Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
-        
+
+        # 6. Kill processes but keep logs (same intent as Bench._run_single)
         self.kill(hosts=selected_hosts, delete_logs=False)
     
     def _check_stderr(self, output):

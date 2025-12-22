@@ -1,6 +1,7 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 from json import dump, load
 from collections import OrderedDict
+import socket
 
 
 class ConfigError(Exception):
@@ -42,6 +43,31 @@ class Committee:
         }
     '''
 
+    @staticmethod
+    def _resolve_hostname(hostname):
+        ''' Resolve hostname to IP address. Returns IP if already an IP, otherwise resolves hostname. '''
+        # Check if it's already an IP address (simple check)
+        try:
+            socket.inet_aton(hostname)
+            return hostname  # Already an IP address
+        except socket.error:
+            pass
+        
+        # Try IPv6
+        try:
+            socket.inet_pton(socket.AF_INET6, hostname)
+            return hostname  # Already an IPv6 address
+        except (socket.error, AttributeError):
+            pass
+        
+        # Resolve hostname to IP
+        try:
+            ip = socket.gethostbyname(hostname)
+            return ip
+        except socket.gaierror:
+            # If resolution fails, return hostname as-is (will cause error later, but preserves original behavior)
+            return hostname
+
     def __init__(self, addresses, base_port):
         ''' The `addresses` field looks as follows:
             { 
@@ -64,18 +90,22 @@ class Committee:
         self.json = {'authorities': OrderedDict()}
         for name, hosts in addresses.items():
             host = hosts.pop(0)
+            # Resolve hostname to IP address
+            host_ip = self._resolve_hostname(host)
             primary_addr = {
-                'primary_to_primary': f'{host}:{port}',
-                'worker_to_primary': f'{host}:{port + 1}'
+                'primary_to_primary': f'{host_ip}:{port}',
+                'worker_to_primary': f'{host_ip}:{port + 1}'
             }
             port += 2
 
             workers_addr = OrderedDict()
             for j, host in enumerate(hosts):
+                # Resolve hostname to IP address
+                host_ip = self._resolve_hostname(host)
                 workers_addr[j] = {
-                    'primary_to_worker': f'{host}:{port}',
-                    'transactions': f'{host}:{port + 1}',
-                    'worker_to_worker': f'{host}:{port + 2}',
+                    'primary_to_worker': f'{host_ip}:{port}',
+                    'transactions': f'{host_ip}:{port + 1}',
+                    'worker_to_worker': f'{host_ip}:{port + 2}',
                 }
                 port += 3
 
