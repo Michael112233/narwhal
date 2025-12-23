@@ -35,9 +35,9 @@ source "$HOME/.cargo/env" 2>/dev/null || export PATH="$HOME/.cargo/bin:$PATH"
 cd narwhal/benchmark && cargo build --release --features benchmark
 
 # 创建方便调用的软链接 ./node 和 ./benchmark_client
-rm -rf narwhal/benchmark/node narwhal/benchmark/benchmark_client 2>/dev/null || true
-ln -s ./target/release/node narwhal/benchmark
-ln -s ./target/release/benchmark_client narwhal/benchmark
+cd narwhal/benchmark && rm -rf node benchmark_client 2>/dev/null || true
+cd narwhal/benchmark && ln -s ./target/release/node node
+cd narwhal/benchmark && ln -s ./target/release/benchmark_client benchmark_client
 
 # ====== 3. 生成 keys 和 committee / parameters ======
 echo "[INFO] Generating keys on controller node ..."
@@ -46,7 +46,7 @@ NODE_COUNT=${#NODES[@]}
 
 for ((i=0; i<NODE_COUNT; i++)); do
   KEY_FILE="narwhal/benchmark/.node-${i}.json"
-  ./narwhal/benchmark/node generate_keys --filename "$KEY_FILE"
+  cd narwhal/benchmark && ./node generate_keys --filename "$KEY_FILE"
   KEY_FILES+=("$KEY_FILE")
 done
 
