@@ -21,7 +21,7 @@ NODES=(
 )
 
 USER="wucy"
-SSH_KEY="$HOME/.ssh/cloudlab_key"
+SSH_KEY="$HOME/.ssh/authorized_keys"
 
 # ====== 1. 清理本地配置/数据库 ======
 echo "[INFO] Cleaning local db and config files ..."
