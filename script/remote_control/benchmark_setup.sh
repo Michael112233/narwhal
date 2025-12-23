@@ -26,7 +26,7 @@ SSH_KEY="$HOME/.ssh/cloudlab_key"
 # ====== 1. 清理本地配置/数据库 ======
 echo "[INFO] Cleaning local db and config files ..."
 rm -rf .db-* .*.json
-mkdir -p results
+mkdir -p narwhal/benchmark/results
 
 # ====== 2. 本地编译（带 benchmark 特性） ======
 echo "[INFO] Building node with benchmark feature ..."
