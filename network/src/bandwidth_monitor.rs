@@ -249,9 +249,6 @@ async fn spawn_bandwidth_monitor_impl(
     interval_secs: u64,
     consensus_round: Option<Arc<AtomicU64>>,
 ) {
-    // Windows 上的 Ctrl+C 处理
-    let mut ctrl_c = tokio::signal::ctrl_c();
-    
     let mut interval = interval(Duration::from_secs(interval_secs));
     let mut tick_count = 0u64;
     // 每10次输出（即每10秒）输出一次完整摘要
@@ -307,8 +304,8 @@ async fn spawn_bandwidth_monitor_impl(
             }
             }
             
-            // Windows 上的 Ctrl+C 处理
-            _ = ctrl_c => {
+            // Windows 上的 Ctrl+C 处理 - 每次循环重新创建
+            _ = tokio::signal::ctrl_c() => {
                 info!("Received Ctrl+C, generating final bandwidth summary...");
                 print_final_summary(&stats_for_signal);
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -316,7 +313,7 @@ async fn spawn_bandwidth_monitor_impl(
             }
         }
     }
-    }
+}
 
     pub fn generate_summary(stats: &[BandwidthStats]) -> String {
         let mut summary = String::new();
@@ -484,7 +481,6 @@ async fn spawn_bandwidth_monitor_wave_impl(
     stats_for_signal: Vec<BandwidthStats>,
     mut wave_notifier: watch::Receiver<u64>,
 ) {
-    let mut ctrl_c = tokio::signal::ctrl_c();
     let mut last_wave = 0u64;
     
     loop {
@@ -522,8 +518,8 @@ async fn spawn_bandwidth_monitor_wave_impl(
                 }
             }
             
-            // Windows 上的 Ctrl+C 处理
-            _ = ctrl_c => {
+            // Windows 上的 Ctrl+C 处理 - 每次循环重新创建
+            _ = tokio::signal::ctrl_c() => {
                 info!("Received Ctrl+C, generating final bandwidth summary...");
                 print_final_summary(&stats_for_signal);
                 tokio::time::sleep(Duration::from_millis(200)).await;
