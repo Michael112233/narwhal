@@ -1,8 +1,7 @@
 sudo apt-get update
 sudo apt-get install tmux
 
-curl --proto '=https' --tlsv1.2 -sSf [https://sh.rustup.rs](https://sh.rustup.rs/) | sh
-. "$HOME/.cargo/env"
+curl https://sh.rustup.rs -sSf | sh -s -- -y
 sudo apt-get install libclang-dev
 
 sudo apt-get update
