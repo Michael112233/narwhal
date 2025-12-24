@@ -18,6 +18,7 @@ use tokio::time::{sleep, Duration};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use adversary::attack::{GROUP, NETWORK_DELAY, TRIGGER_NETWORK_INTERRUPT};
 use config::{Committee, Import as _};
+use std::sync::atomic::Ordering;
 
 #[cfg(test)]
 #[path = "tests/reliable_sender_tests.rs"]
@@ -92,7 +93,7 @@ impl ReliableSender {
         for address in addresses {
             let sender_index = self.committee.address_to_index(&self.sender_address);
             let receiver_index = self.committee.address_to_index(&address);
-            if TRIGGER_NETWORK_INTERRUPT && GROUP[sender_index] != GROUP[receiver_index] {
+            if TRIGGER_NETWORK_INTERRUPT.load(Ordering::Relaxed) && GROUP[sender_index] != GROUP[receiver_index] {
                 delay_addresses.push(address);
             } else {
                 not_delay_addresses.push(address);

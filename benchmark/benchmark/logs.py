@@ -244,13 +244,15 @@ class LogParser:
                     end = self.commits[batch_id]
                     lat = end - start
                     latency += [lat]
-                    # Store relative end time (relative to system start)
+                    # Store relative times (relative to system start)
+                    start_time_relative = start - system_start_time
                     end_time_relative = end - system_start_time
                     latency_details.append({
                         'tx_id': tx_id,
                         'start_time': start,
                         'end_time': end,
                         'latency': lat,
+                        'start_time_relative': start_time_relative,
                         'end_time_relative': end_time_relative
                     })
         
@@ -278,7 +280,7 @@ class LogParser:
         
         try:
             with open(filename, 'w', newline='') as csvfile:
-                fieldnames = ['tx_id', 'start_time', 'end_time', 'latency_ms', 'end_time_relative_sec']
+                fieldnames = ['tx_id', 'start_time', 'end_time', 'latency_ms', 'start_time_relative_sec', 'end_time_relative_sec']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 
                 writer.writeheader()
@@ -288,6 +290,7 @@ class LogParser:
                         'start_time': detail['start_time'],
                         'end_time': detail['end_time'],
                         'latency_ms': detail['latency'] * 1_000,  # Convert to milliseconds
+                        'start_time_relative_sec': detail['start_time_relative'],
                         'end_time_relative_sec': detail['end_time_relative']
                     })
             

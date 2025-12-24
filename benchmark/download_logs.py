@@ -5,6 +5,8 @@ Script to download logs from CloudLab remote nodes
 
 import sys
 import os
+import socket
+import time
 from pathlib import Path
 from fabric import Connection
 from paramiko import RSAKey
@@ -144,28 +146,55 @@ def safe_get_file(conn, remote_path, local_path, timeout=60):
         sys.stdout.flush()
         raise
 
-def download_single_file(hostname, username, port, conn_kwargs, remote_path, local_path, timeout=120):
-    """Download a single file using a fresh connection"""
+def download_single_file(hostname, username, port, conn_kwargs, remote_path, local_path, timeout=120, max_retries=3):
+    """Download a single file using a fresh connection with retry logic"""
     conn = None
-    try:
-        # Create new connection for each file
-        conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
-        conn.open()
-        safe_get_file(conn, remote_path, local_path, timeout=timeout)
-        return True
-    except FileNotFoundError:
-        raise
-    except Exception as e:
-        Print.warn(f'    ⚠ Download failed: {str(e)[:100]}')
-        sys.stdout.flush()
-        raise
-    finally:
-        # Always close connection after each file
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Create new connection for each file with longer timeout
+            # Increase connect_timeout to handle slow SSH banner responses
+            conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=60)
+            conn.open()
+            safe_get_file(conn, remote_path, local_path, timeout=timeout)
+            return True
+        except FileNotFoundError:
+            # File not found, don't retry
+            raise
+        except (SSHException, socket.timeout, TimeoutError) as e:
+            # SSH connection errors - retry
+            if attempt < max_retries:
+                Print.warn(f'    ⚠ Connection attempt {attempt}/{max_retries} failed: {str(e)[:100]}, retrying...')
+                sys.stdout.flush()
+                # Close connection if it exists before retrying
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                # Wait before retry (exponential backoff)
+                time.sleep(min(2 ** attempt, 10))  # 2s, 4s, 8s max
+                continue
+            else:
+                Print.warn(f'    ⚠ Connection failed after {max_retries} attempts: {str(e)[:100]}')
+                sys.stdout.flush()
+                raise
+        except Exception as e:
+            # Other errors - don't retry
+            Print.warn(f'    ⚠ Download failed: {str(e)[:100]}')
+            sys.stdout.flush()
+            raise
+        finally:
+            # Always close connection after each attempt
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
+    
+    return False
 
 def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
     """Download logs from all CloudLab hosts"""

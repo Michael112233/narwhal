@@ -9,6 +9,7 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng as _;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::Ordering;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -80,7 +81,7 @@ impl SimpleSender {
         for address in addresses {
             let sender_index = self.committee.address_to_index(&self.sender_address);
             let receiver_index = self.committee.address_to_index(&address);
-            if TRIGGER_NETWORK_INTERRUPT && GROUP[sender_index] != GROUP[receiver_index] {
+            if TRIGGER_NETWORK_INTERRUPT.load(Ordering::Relaxed) && GROUP[sender_index] != GROUP[receiver_index] {
                 delay_addresses.push(address);
             } else {
                 not_delay_addresses.push(address);
