@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Script to download logs from CloudLab remote nodes
+Downloads logs through node0 using internal network (inner_ip from cloudlab_settings.json)
 """
 
 import sys
 import os
-import socket
 import time
 from pathlib import Path
 from fabric import Connection
@@ -29,6 +29,7 @@ def get_connection_kwargs(key_path):
     except (FileNotFoundError, PasswordRequiredException, SSHException) as e:
         Print.error(f'Failed to load SSH key: {e}')
         return {}
+
 
 @contextmanager
 def timeout_context(seconds):
@@ -66,7 +67,7 @@ def safe_get_file(conn, remote_path, local_path, timeout=30):
     # Get file size for progress indication
     file_size = 0
     try:
-        result = conn.run(f'stat -c%s {remote_path} 2>/dev/null || echo \"0\"', hide=True, warn=True)
+        result = conn.run(f'stat -c%s {remote_path} 2>/dev/null || echo "0"', hide=True, warn=True)
         file_size = int(result.stdout.strip() or '0')
         if file_size > 0:
             size_mb = file_size / (1024 * 1024)
@@ -146,58 +147,117 @@ def safe_get_file(conn, remote_path, local_path, timeout=30):
         sys.stdout.flush()
         raise
 
-def download_single_file(hostname, username, port, conn_kwargs, remote_path, local_path, timeout=30, max_retries=3):
-    """Download a single file using a fresh connection with retry logic"""
-    conn = None
+def collect_logs_via_node0(conn, repo_name, host_info, max_workers=1):
+    """
+    Collect logs from all nodes via node0 using internal network
+    Uses inner_ip from cloudlab_settings.json
     
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Create new connection for each file with longer timeout
-            # Increase connect_timeout to handle slow SSH banner responses
-            conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
-            conn.open()
-            safe_get_file(conn, remote_path, local_path, timeout=timeout)
-            return True
-        except FileNotFoundError:
-            # File not found, don't retry
-            raise
-        except (SSHException, socket.timeout, TimeoutError) as e:
-            # SSH connection errors - retry
-            if attempt < max_retries:
-                Print.warn(f'    ⚠ Connection attempt {attempt}/{max_retries} failed: {str(e)[:100]}, retrying...')
-                sys.stdout.flush()
-                # Close connection if it exists before retrying
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-                    conn = None
-                # Wait before retry (exponential backoff)
-                time.sleep(min(2 ** attempt, 10))  # 2s, 4s, 8s max
-                continue
-            else:
-                Print.warn(f'    ⚠ Connection failed after {max_retries} attempts: {str(e)[:100]}')
-                sys.stdout.flush()
-                raise
-        except Exception as e:
-            # Other errors - don't retry
-            Print.warn(f'    ⚠ Download failed: {str(e)[:100]}')
+    Args:
+        conn: Connection to node0
+        repo_name: Repository name on remote nodes
+        host_info: List of host info dicts (with 'inner_ip' field)
+        max_workers: Maximum number of workers per node
+    
+    Returns:
+        tuple: (dict mapping node index to list of collected log paths on node0, temp_dir)
+    """
+    Print.info('  Collecting logs from all nodes via internal network...')
+    sys.stdout.flush()
+    
+    # Create temporary directory on node0 to store all logs
+    temp_dir = f'/tmp/narwhal_logs_{int(time.time())}'
+    conn.run(f'mkdir -p {temp_dir}', hide=True, warn=True)
+    
+    collected_logs = {}
+    
+    for i, host in enumerate(host_info):
+        hostname = host['hostname']
+        username = host.get('username', 'root')
+        inner_ip = host.get('inner_ip')  # Get inner_ip from config
+        
+        if not inner_ip:
+            Print.warn(f'    ⚠ Node{i} ({hostname}) has no inner_ip configured, skipping...')
             sys.stdout.flush()
-            raise
-        finally:
-            # Always close connection after each attempt
-            if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                conn = None
+            continue
+        
+        Print.info(f'    [{i+1}/{len(host_info)}] Collecting logs from node{i} ({hostname}, inner_ip: {inner_ip})...')
+        sys.stdout.flush()
+        
+        node_logs = []
+        
+        # Create node directory on node0
+        node_dir = f'{temp_dir}/node{i}'
+        conn.run(f'mkdir -p {node_dir}', hide=True, warn=True)
+        
+        # Collect primary log
+        remote_log = f'{repo_name}/{PathMaker.primary_log_file(i)}'
+        local_log_on_node0 = f'{node_dir}/primary-{i}.log'
+        
+        Print.info(f'      Collecting primary-{i}.log...')
+        sys.stdout.flush()
+        
+        # Use scp or rsync to copy from other node via internal network
+        # If it's node0 itself, just copy directly
+        if i == 0:
+            result = conn.run(f'cp {remote_log} {local_log_on_node0} 2>/dev/null || echo "not_found"', 
+                            hide=True, warn=True)
+        else:
+            # Copy from other node via internal network using inner_ip
+            result = conn.run(
+                f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
+                f'{username}@{inner_ip}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                hide=True, warn=True
+            )
+        
+        if 'not_found' not in result.stdout and conn.run(f'test -f {local_log_on_node0}', hide=True, warn=True).ok:
+            node_logs.append(local_log_on_node0)
+            Print.info(f'      ✓ Collected primary-{i}.log')
+        else:
+            Print.warn(f'      ⚠ primary-{i}.log not found on node{i}')
+        sys.stdout.flush()
+        
+        # Collect worker logs
+        for j in range(max_workers):
+            remote_log = f'{repo_name}/{PathMaker.worker_log_file(i, j)}'
+            local_log_on_node0 = f'{node_dir}/worker-{i}-{j}.log'
+            
+            if i == 0:
+                result = conn.run(f'cp {remote_log} {local_log_on_node0} 2>/dev/null || echo "not_found"', 
+                                hide=True, warn=True)
+            else:
+                result = conn.run(
+                    f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
+                    f'{username}@{inner_ip}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                    hide=True, warn=True
+                )
+            
+            if 'not_found' not in result.stdout and conn.run(f'test -f {local_log_on_node0}', hide=True, warn=True).ok:
+                node_logs.append(local_log_on_node0)
+        
+        # Collect client logs
+        for j in range(max_workers):
+            remote_log = f'{repo_name}/{PathMaker.client_log_file(i, j)}'
+            local_log_on_node0 = f'{node_dir}/client-{i}-{j}.log'
+            
+            if i == 0:
+                result = conn.run(f'cp {remote_log} {local_log_on_node0} 2>/dev/null || echo "not_found"', 
+                                hide=True, warn=True)
+            else:
+                result = conn.run(
+                    f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
+                    f'{username}@{inner_ip}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                    hide=True, warn=True
+                )
+            
+            if 'not_found' not in result.stdout and conn.run(f'test -f {local_log_on_node0}', hide=True, warn=True).ok:
+                node_logs.append(local_log_on_node0)
+        
+        collected_logs[i] = node_logs
     
-    return False
+    return collected_logs, temp_dir
 
 def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
-    """Download logs from all CloudLab hosts"""
+    """Download logs from all CloudLab hosts via node0"""
     
     # Load settings
     try:
@@ -211,11 +271,17 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
     host_info = manager.get_host_info()
     repo_name = settings.repo_name
     
-    # Create local logs directory
-    logs_dir = Path(PathMaker.logs_path())
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    if not host_info:
+        Print.error('No hosts configured')
+        return False
     
-    Print.info(f'Downloading logs from {len(host_info)} hosts...')
+    # Get node0 (first node)
+    node0 = host_info[0]
+    node0_hostname = node0['hostname']
+    node0_username = node0.get('username', 'root')
+    node0_port = node0.get('port', 22)
+    
+    Print.info(f'Connecting to node0: {node0_username}@{node0_hostname}:{node0_port}')
     Print.info(f'Repository name: {repo_name}')
     Print.info('=' * 60)
     sys.stdout.flush()
@@ -225,103 +291,91 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
         Print.error('Failed to load SSH key. Cannot proceed.')
         return False
     
-    success_count = 0
-    fail_count = 0
+    # Create local logs directory
+    logs_dir = Path(PathMaker.logs_path())
+    logs_dir.mkdir(parents=True, exist_ok=True)
     
-    for i, host in enumerate(host_info):
-        hostname = host['hostname']
-        username = host.get('username', 'root')
-        port = host.get('port', 22)
-        
-        Print.info(f'[{i+1}/{len(host_info)}] Processing {username}@{hostname}:{port}...')
+    conn = None
+    temp_dir = None
+    try:
+        # Connect to node0
+        Print.info('Connecting to node0...')
+        sys.stdout.flush()
+        conn = Connection(node0_hostname, user=node0_username, port=node0_port, 
+                         connect_kwargs=conn_kwargs, connect_timeout=30)
+        conn.open()
+        Print.info('✓ Connected to node0')
         sys.stdout.flush()
         
-        host_success = True
+        # Collect logs from all nodes via node0
+        collected_logs, temp_dir = collect_logs_via_node0(conn, repo_name, host_info, max_workers)
         
-        try:
-            # Download primary log (new connection for each file)
-            remote_log = f'{repo_name}/{PathMaker.primary_log_file(i)}'
-            local_log = PathMaker.primary_log_file(i)
-            Path(local_log).parent.mkdir(parents=True, exist_ok=True)
-            Print.info(f'  Downloading primary-{i}.log...')
+        # Download all collected logs from node0
+        Print.info('=' * 60)
+        Print.info('Downloading collected logs from node0...')
+        Print.info('=' * 60)
+        sys.stdout.flush()
+        
+        success_count = 0
+        fail_count = 0
+        
+        for node_idx, log_paths in collected_logs.items():
+            for log_path in log_paths:
+                # Determine local path based on log filename
+                log_filename = os.path.basename(log_path)
+                local_log = logs_dir / log_filename
+                local_log.parent.mkdir(parents=True, exist_ok=True)
+                
+                Print.info(f'  Downloading {log_filename}...')
+                sys.stdout.flush()
+                
+                try:
+                    safe_get_file(conn, log_path, local_log, timeout=30)
+                    Print.info(f'  ✓ Downloaded {log_filename}')
+                    success_count += 1
+                    sys.stdout.flush()
+                except Exception as e:
+                    Print.warn(f'  ⚠ Failed to download {log_filename}: {str(e)[:100]}')
+                    fail_count += 1
+                    sys.stdout.flush()
+        
+        # Clean up temporary directory on node0
+        if temp_dir:
+            Print.info(f'Cleaning up temporary directory on node0...')
             sys.stdout.flush()
+            conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
+        
+        Print.info('=' * 60)
+        Print.info(f'Download complete: {success_count} succeeded, {fail_count} failed')
+        Print.info(f'Logs saved to: {logs_dir.absolute()}')
+        sys.stdout.flush()
+        
+        return fail_count == 0
+        
+    except KeyboardInterrupt:
+        Print.warn('\n✗ Interrupted by user')
+        return False
+    except Exception as e:
+        error_msg = str(e)
+        if len(error_msg) > 200:
+            error_msg = error_msg[:200] + '...'
+        Print.error(f'✗ Failed: {error_msg}')
+        return False
+    finally:
+        # Clean up connection
+        if conn:
             try:
-                download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=30)
-                Print.info(f'  ✓ Downloaded primary-{i}.log')
-                sys.stdout.flush()
-            except FileNotFoundError:
-                Print.warn(f'  ⚠ primary-{i}.log not found on remote')
-                sys.stdout.flush()
-            except Exception as e:
-                Print.warn(f'  ⚠ primary-{i}.log download failed: {str(e)[:100]}')
-                sys.stdout.flush()
-                host_success = False
-            
-            # Download worker logs (new connection for each file)
-            for j in range(max_workers):
-                remote_log = f'{repo_name}/{PathMaker.worker_log_file(i, j)}'
-                local_log = PathMaker.worker_log_file(i, j)
-                Path(local_log).parent.mkdir(parents=True, exist_ok=True)
-                Print.info(f'  Downloading worker-{i}-{j}.log...')
-                sys.stdout.flush()
-                try:
-                    download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=30)
-                    Print.info(f'  ✓ Downloaded worker-{i}-{j}.log')
-                    sys.stdout.flush()
-                except FileNotFoundError:
-                    # Don't warn for worker logs as they might not exist
-                    pass
-                except Exception as e:
-                    # Don't warn for worker logs as they might not exist
-                    pass
-            
-            # Download client logs (new connection for each file)
-            for j in range(max_workers):
-                remote_log = f'{repo_name}/{PathMaker.client_log_file(i, j)}'
-                local_log = PathMaker.client_log_file(i, j)
-                Path(local_log).parent.mkdir(parents=True, exist_ok=True)
-                Print.info(f'  Downloading client-{i}-{j}.log...')
-                sys.stdout.flush()
-                try:
-                    download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=30)
-                    Print.info(f'  ✓ Downloaded client-{i}-{j}.log')
-                    sys.stdout.flush()
-                except FileNotFoundError:
-                    # Don't warn for client logs as they might not exist
-                    pass
-                except Exception as e:
-                    # Don't warn for client logs as they might not exist
-                    pass
-            
-            if host_success:
-                success_count += 1
-            else:
-                fail_count += 1
-            Print.info(f'  ✓ Completed {hostname}')
-            sys.stdout.flush()
-            
-        except KeyboardInterrupt:
-            Print.warn('\n  ✗ Interrupted by user')
-            break
-        except Exception as e:
-            fail_count += 1
-            error_msg = str(e)
-            if len(error_msg) > 200:
-                error_msg = error_msg[:200] + '...'
-            Print.warn(f'  ✗ Failed to process {hostname}: {error_msg}')
-            sys.stdout.flush()
-    
-    Print.info('=' * 60)
-    Print.info(f'Download complete: {success_count} succeeded, {fail_count} failed')
-    Print.info(f'Logs saved to: {logs_dir.absolute()}')
-    sys.stdout.flush()
-    
-    return fail_count == 0
+                # Clean up temp directory if still exists
+                if temp_dir:
+                    conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
+                conn.close()
+            except Exception:
+                pass
 
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Download logs from CloudLab remote nodes')
+    parser = argparse.ArgumentParser(description='Download logs from CloudLab remote nodes via node0')
     parser.add_argument('--settings', default='cloudlab_settings.json', 
                        help='Path to CloudLab settings file')
     parser.add_argument('--max-workers', type=int, default=1,
@@ -331,4 +385,3 @@ if __name__ == '__main__':
     
     success = download_logs(args.settings, args.max_workers)
     sys.exit(0 if success else 1)
-

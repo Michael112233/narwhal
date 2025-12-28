@@ -11,6 +11,7 @@ use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
+use adversary::attack::{start_attack_scheduler, NETWORK_PARTITION};
 use bytes::Bytes;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
@@ -67,6 +68,9 @@ impl Primary {
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
     ) {
+        if NETWORK_PARTITION {
+            start_attack_scheduler();
+        }
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
         let (tx_parents, rx_parents) = channel(CHANNEL_CAPACITY);
