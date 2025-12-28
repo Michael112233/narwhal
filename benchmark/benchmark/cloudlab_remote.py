@@ -659,7 +659,7 @@ class CloudLabBench:
             # Run commands on each group
             for (username, port), hostnames in hosts_by_config.items():
                 conn_kwargs = self._get_connection_kwargs({})
-                g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
+                g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=60)
                 g.run(' && '.join(cmd), hide=True)
                 
                 # Modify attack.rs AFTER git operations (so the file exists)
@@ -793,92 +793,69 @@ class CloudLabBench:
         
         return committee
     
-    def _logs(self, committee, faults):
-        """Download logs from all hosts"""
+    def _logs(self, committee, faults, max_workers=1):
+        """Download logs from all hosts using download_logs.py"""
         Print.info('Downloading logs...')
         
-        # Create local logs directory
-        Path(PathMaker.logs_path()).mkdir(parents=True, exist_ok=True)
+        # Get benchmark directory (parent of benchmark/benchmark/)
+        benchmark_dir = Path(__file__).parent.parent
+        download_logs_script = benchmark_dir / 'download_logs.py'
         
-        # Download logs from each host
-        repo_name = self.settings.repo_name
-        host_info = self.manager.get_host_info()
-        total_hosts = len(host_info)
-        downloaded_hosts = 0
+        if not download_logs_script.exists():
+            Print.error(f'download_logs.py not found at {download_logs_script}')
+            Print.error('Falling back to basic log download...')
+            # Fallback: create logs directory and return parser
+            Path(PathMaker.logs_path()).mkdir(parents=True, exist_ok=True)
+            return LogParser.process(PathMaker.logs_path(), faults=faults)
         
-        for idx, host in enumerate(host_info):
-            hostname = host['hostname']
-            username = host.get('username', 'root')
-            port = host.get('port', 22)
-            conn_kwargs = self._get_connection_kwargs({})
+        # Run download_logs.py to download all logs
+        try:
+            import sys
+            Print.info(f'Running download_logs.py with max_workers={max_workers}...')
+            result = subprocess.run(
+                [sys.executable, str(download_logs_script), '--max-workers', str(max_workers)],
+                cwd=str(benchmark_dir),
+                capture_output=False,  # Show output in real-time
+                text=True
+            )
             
-            host_num = idx + 1
-            Print.info(f'Downloading logs from host {host_num}/{total_hosts}: {username}@{hostname}:{port}')
+            if result.returncode == 0:
+                Print.info('✓ download_logs.py completed successfully')
+            else:
+                Print.warn(f'⚠ download_logs.py exited with code {result.returncode}')
+        except Exception as e:
+            Print.warn(f'⚠ Failed to run download_logs.py: {e}')
+            Print.warn('Logs may be incomplete')
+        
+        # After downloading logs, run processing script
+        Print.info('=' * 60)
+        Print.info('Processing logs...')
+        Print.info('=' * 60)
+        
+        try:
+            run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
+            anaconda_python = '/Users/michael/opt/anaconda3/bin/python3'
             
-            primary_ok = 0
-            worker_ok = 0
-            client_ok = 0
-            
-            try:
-                conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs)
-                
-                # Download primary logs
-                remote_log = f'{repo_name}/{PathMaker.primary_log_file(idx)}'
-                local_log = PathMaker.primary_log_file(idx)
-                Path(local_log).parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    conn.get(remote_log, str(local_log))
-                    primary_ok += 1
-                    Print.info(f'  ✓ primary-{idx}.log downloaded')
-                except Exception:
-                    Print.warn(f'  ⚠ primary-{idx}.log not found on {hostname}')
-                
-                # Download worker logs - iterate through all workers for this authority
-                # Get workers_addresses to know which worker IDs exist
-                workers_addresses = committee.workers_addresses(faults)
-                if idx < len(workers_addresses):
-                    for (worker_id, address) in workers_addresses[idx]:
-                        # Convert worker_id to int if it's a string
-                        worker_id_int = int(worker_id) if isinstance(worker_id, str) else worker_id
-                        remote_log = f'{repo_name}/{PathMaker.worker_log_file(idx, worker_id_int)}'
-                        local_log = PathMaker.worker_log_file(idx, worker_id_int)
-                        Path(local_log).parent.mkdir(parents=True, exist_ok=True)
-                        try:
-                            conn.get(remote_log, str(local_log))
-                            worker_ok += 1
-                            Print.info(f'  ✓ worker-{idx}-{worker_id_int}.log downloaded')
-                        except Exception:
-                            # Worker logs may legitimately not exist for some configs
-                            Print.warn(f'  ⚠ worker-{idx}-{worker_id_int}.log not found on {hostname}')
-                
-                # Download client logs - iterate through all clients for this authority
-                # Clients correspond to workers, so use the same worker IDs
-                if idx < len(workers_addresses):
-                    for (worker_id, address) in workers_addresses[idx]:
-                        # Convert worker_id to int if it's a string
-                        worker_id_int = int(worker_id) if isinstance(worker_id, str) else worker_id
-                        remote_log = f'{repo_name}/{PathMaker.client_log_file(idx, worker_id_int)}'
-                        local_log = PathMaker.client_log_file(idx, worker_id_int)
-                        Path(local_log).parent.mkdir(parents=True, exist_ok=True)
-                        try:
-                            conn.get(remote_log, str(local_log))
-                            client_ok += 1
-                            Print.info(f'  ✓ client-{idx}-{worker_id_int}.log downloaded')
-                        except Exception:
-                            Print.warn(f'  ⚠ client-{idx}-{worker_id_int}.log not found on {hostname}')
-                
-                downloaded_hosts += 1
-                Print.info(
-                    f'  Host {host_num}/{total_hosts} summary: '
-                    f'primary={primary_ok}, workers={worker_ok}, clients={client_ok}'
+            if run_benchmark_script.exists():
+                Print.info('Running run_cloudlab_benchmark.py --no-run to process logs...')
+                result = subprocess.run(
+                    [anaconda_python, str(run_benchmark_script), '--no-run'],
+                    cwd=str(benchmark_dir),
+                    capture_output=False,  # Show output in real-time
+                    text=True
                 )
-            except Exception as e:
-                Print.warn(f'  ✗ Failed to download logs from {hostname}: {e}')
+                if result.returncode == 0:
+                    Print.info('✓ run_cloudlab_benchmark.py --no-run completed successfully')
+                else:
+                    Print.warn(f'⚠ run_cloudlab_benchmark.py --no-run exited with code {result.returncode}')
+            else:
+                Print.warn(f'⚠ run_cloudlab_benchmark.py not found at {run_benchmark_script}')
+        except Exception as e:
+            Print.warn(f'⚠ Failed to run run_cloudlab_benchmark.py --no-run: {e}')
         
-        Print.info(
-            f'Log download finished: {downloaded_hosts}/{total_hosts} hosts processed successfully'
-        )
+        Print.info('=' * 60)
         
+        # Parse and return logs
         return LogParser.process(PathMaker.logs_path(), faults=faults)
     
     def _background_run(self, host_info, command, log_file):
@@ -1254,7 +1231,7 @@ SCRIPTEOF'''
                             )
                             
                             # Download and parse logs
-                            result = self._logs(committee_copy, bench_parameters.faults)
+                            result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
                             result.print(PathMaker.result_file(
                                 bench_parameters.faults,
                                 n,

@@ -2,34 +2,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::time::sleep;
 
-// 使用 AtomicBool 实现运行时可变
 pub static TRIGGER_NETWORK_INTERRUPT: AtomicBool = AtomicBool::new(false);
+pub const NETWORK_PARTITION: bool = true;
 
-// 添加触发时间配置（相对于程序启动的时间，单位：秒）
-pub const ATTACK_START_TIME_SEC: u64 = 10; // 在程序启动后10秒触发
-pub const ATTACK_DURATION_SEC: u64 = 5;    // 持续5秒
+pub const ATTACK_START_TIME_SEC: u64 = 40; 
+pub const ATTACK_DURATION_SEC: u64 = 10;    
 
 pub const GROUP: [usize; 10] = [0, 1, 1, 0, 1, 1, 0, 0, 0, 0];
-pub const NETWORK_DELAY: u64 = 200;
+pub const NETWORK_DELAY: u64 = 5000;
 
-// 启动一个后台任务来管理攻击时间
 pub fn start_attack_scheduler() {
     let start_time = Instant::now();
-    
+
     tokio::spawn(async move {
-        // 等待到触发时间
         sleep(Duration::from_secs(ATTACK_START_TIME_SEC)).await;
-        
-        // 启用攻击
+        // start network partition attack
         TRIGGER_NETWORK_INTERRUPT.store(true, Ordering::Relaxed);
-        println!("[ATTACK] Network interrupt enabled at {}s", start_time.elapsed().as_secs());
-        
-        // 持续指定时间
+        println!("[Attack] Network attack starts at {}s", start_time.elapsed().as_secs());
         sleep(Duration::from_secs(ATTACK_DURATION_SEC)).await;
-        
-        // 禁用攻击
+        // stop attack
         TRIGGER_NETWORK_INTERRUPT.store(false, Ordering::Relaxed);
-        println!("[ATTACK] Network interrupt disabled at {}s", start_time.elapsed().as_secs());
+        let end_time = Instant::now();
+        println!("[Attack] Attack ends at {}s", end_time.elapsed().as_secs());
     });
 }
 

@@ -55,7 +55,7 @@ def check_file_exists(conn, remote_path):
     except:
         return False
 
-def safe_get_file(conn, remote_path, local_path, timeout=60):
+def safe_get_file(conn, remote_path, local_path, timeout=30):
     """Download file with timeout, existence check, and progress percentage"""
     # First check if file exists
     Print.info(f'    Checking if file exists...')
@@ -146,7 +146,7 @@ def safe_get_file(conn, remote_path, local_path, timeout=60):
         sys.stdout.flush()
         raise
 
-def download_single_file(hostname, username, port, conn_kwargs, remote_path, local_path, timeout=120, max_retries=3):
+def download_single_file(hostname, username, port, conn_kwargs, remote_path, local_path, timeout=30, max_retries=3):
     """Download a single file using a fresh connection with retry logic"""
     conn = None
     
@@ -154,7 +154,7 @@ def download_single_file(hostname, username, port, conn_kwargs, remote_path, loc
         try:
             # Create new connection for each file with longer timeout
             # Increase connect_timeout to handle slow SSH banner responses
-            conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=60)
+            conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
             conn.open()
             safe_get_file(conn, remote_path, local_path, timeout=timeout)
             return True
@@ -246,7 +246,7 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
             Print.info(f'  Downloading primary-{i}.log...')
             sys.stdout.flush()
             try:
-                download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=120)
+                download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=30)
                 Print.info(f'  ✓ Downloaded primary-{i}.log')
                 sys.stdout.flush()
             except FileNotFoundError:
@@ -265,7 +265,7 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
                 Print.info(f'  Downloading worker-{i}-{j}.log...')
                 sys.stdout.flush()
                 try:
-                    download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=120)
+                    download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=30)
                     Print.info(f'  ✓ Downloaded worker-{i}-{j}.log')
                     sys.stdout.flush()
                 except FileNotFoundError:
@@ -283,7 +283,7 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
                 Print.info(f'  Downloading client-{i}-{j}.log...')
                 sys.stdout.flush()
                 try:
-                    download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=120)
+                    download_single_file(hostname, username, port, conn_kwargs, remote_log, local_log, timeout=30)
                     Print.info(f'  ✓ Downloaded client-{i}-{j}.log')
                     sys.stdout.flush()
                 except FileNotFoundError:

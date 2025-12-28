@@ -206,9 +206,17 @@ def plot_latency_time(csv_file, output_file=None, window_size=None, show_scatter
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.legend(loc='best')
     
-    # Set reasonable axis limits
-    plt.xlim(left=0)
-    plt.ylim(bottom=0)
+    # Set reasonable axis limits based on actual data range
+    # X-axis: use actual data range with small padding
+    x_min = np.min(time_array)
+    x_max = np.max(time_array)
+    x_padding = (x_max - x_min) * 0.02  # 2% padding
+    plt.xlim(left=max(0, x_min - x_padding), right=x_max + x_padding)
+    
+    # Y-axis: start from 0, but allow some padding at top
+    y_max = np.max(latency_array)
+    y_padding = y_max * 0.05  # 5% padding
+    plt.ylim(bottom=0, top=y_max + y_padding)
     
     plt.tight_layout()
     

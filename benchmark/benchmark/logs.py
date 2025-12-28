@@ -4,6 +4,7 @@ from glob import glob
 from multiprocessing import Pool
 from os.path import join
 from re import findall, search
+import re
 from statistics import mean
 import csv
 
@@ -182,7 +183,9 @@ class LogParser:
         if not log or not log.strip():
             raise ParseError('Worker log is empty - process may not have started correctly')
         
-        if search(r'(?:panic|Error)', log) is not None:
+        # Only check for actual panics, not warnings or connection errors
+        # Look for "panicked at" (Rust panic) or "thread.*panicked" patterns
+        if search(r'thread.*panicked|panicked at', log, re.IGNORECASE) is not None:
             raise ParseError('Worker(s) panicked')
 
         tmp = findall(r'Batch ([^ ]+) contains (\d+) B', log)
@@ -199,6 +202,21 @@ class LogParser:
         return sizes, samples, ip
 
     def _to_posix(self, string):
+        # Handle cases where log lines might be merged or contain extra content
+        # Extract just the timestamp part (format: YYYY-MM-DDTHH:MM:SS.mmmZ or YYYY-MM-DDTHH:MM:SS.mmm+00:00)
+        import re
+        # Match ISO format timestamp: YYYY-MM-DDTHH:MM:SS.mmmZ or YYYY-MM-DDTHH:MM:SS.mmm+00:00
+        timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+[Z\+])', string)
+        if timestamp_match:
+            string = timestamp_match.group(1)
+        # If still contains extra content, try to extract just the timestamp part
+        if ' ' in string or ']' in string or '[' in string:
+            # Extract only the timestamp part before any space or bracket
+            parts = re.split(r'[\[\]\s]', string)
+            for part in parts:
+                if re.match(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+', part):
+                    string = part
+                    break
         x = datetime.fromisoformat(string.replace('Z', '+00:00'))
         return datetime.timestamp(x)
 
