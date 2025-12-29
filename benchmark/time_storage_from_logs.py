@@ -78,10 +78,40 @@ def extract_round_info(round_time_info, node_id):
                 'node_id': node_id,
                 'round_number': round_number,
                 'time_stamp': timestamp_str,
+                'round_end_time': '',  # Will be set later
                 'certificates': []
             })
     
     return round_info
+
+
+def calculate_round_end_times(round_info):
+    """Calculate round end time for each round as relative time (ms) from round start.
+    
+    Args:
+        round_info: List of round_info dictionaries (modified in place)
+    """
+    # Sort by round number
+    sorted_rounds = sorted(round_info, key=lambda x: x['round_number'])
+    
+    # For each round, calculate relative end time (time difference from round start)
+    for i in range(len(sorted_rounds) - 1):
+        current_round = sorted_rounds[i]
+        next_round = sorted_rounds[i + 1]
+        
+        # Calculate time difference in milliseconds
+        round_start_posix = parse_timestamp(current_round['time_stamp'])
+        round_end_posix = parse_timestamp(next_round['time_stamp'])
+        
+        if round_start_posix is not None and round_end_posix is not None:
+            time_diff_ms = (round_end_posix - round_start_posix) * 1000
+            current_round['round_end_time'] = max(time_diff_ms, 0)
+        else:
+            current_round['round_end_time'] = ''
+    
+    # Last round has no end time (or we could leave it empty)
+    if sorted_rounds:
+        sorted_rounds[-1]['round_end_time'] = ''
 
 
 def create_round_dict(round_info):
@@ -219,7 +249,7 @@ def export_to_csv(round_info, csv_filename, write_header=False):
         
         # Write header if this is the first node
         if write_header:
-            header = ['Node_ID', 'Round', 'Round_Start_Time', 'Certificate_Count']
+            header = ['Node_ID', 'Round', 'Round_Start_Time', 'Round_End_Time_ms', 'Certificate_Count']
             for j in range(1, max_certs + 1):
                 header.append(f'Certificate_{j}_Time_Delta_ms')
                 header.append(f'Certificate_{j}_Origin')
@@ -230,6 +260,7 @@ def export_to_csv(round_info, csv_filename, write_header=False):
             node_id = round_item.get('node_id', '')
             round_num = round_item.get('round_number', '')
             round_start = round_item.get('time_stamp', '')
+            round_end = round_item.get('round_end_time', '')
             cert_count = len(round_item.get('certificates', []))
             certs = round_item.get('certificates', [])
             
@@ -238,6 +269,7 @@ def export_to_csv(round_info, csv_filename, write_header=False):
                 node_id,
                 round_num,
                 round_start if round_start else '',
+                format_timestamp(round_end) if round_end != '' else '',
                 cert_count
             ]
             
@@ -254,15 +286,16 @@ def export_to_csv(round_info, csv_filename, write_header=False):
             writer.writerow(row)
 
 
-def process_node_log(node_id, csv_filename, num_nodes):
+def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
     """Process a single node's log file.
     
     Args:
         node_id: Node ID
         csv_filename: Output CSV file path
         num_nodes: Total number of nodes (for header writing)
+        logs_dir: Directory containing log files (default: 'logs')
     """
-    log_file_path = f'logs/primary-{node_id}.log'
+    log_file_path = f'{logs_dir}/primary-{node_id}.log'
     
     # Parse log file
     round_time_info, certificate_info = parse_log_file(log_file_path)
@@ -272,6 +305,9 @@ def process_node_log(node_id, csv_filename, num_nodes):
     
     # Extract round information
     round_info = extract_round_info(round_time_info, node_id)
+    
+    # Calculate round end times (next round start time)
+    calculate_round_end_times(round_info)
     
     # Create round dictionary for quick lookup
     round_info_dict = create_round_dict(round_info)
@@ -287,10 +323,66 @@ def process_node_log(node_id, csv_filename, num_nodes):
     print(f"Node {node_id}: CSV exported to {csv_filename}\n")
 
 
+def export_round_end_pivot_table(csv_filename, output_filename):
+    """Export a pivot table with rounds as rows, nodes as columns, and round end time (relative, ms) as values.
+    
+    Args:
+        csv_filename: Input CSV file path (round_certificate_analysis.csv)
+        output_filename: Output CSV file path for the pivot table
+    """
+    # Read the CSV file and extract round end time data
+    round_node_end_time = defaultdict(dict)  # {round: {node_id: round_end_time_ms}}
+    all_rounds = set()
+    all_nodes = set()
+    
+    try:
+        with open(csv_filename, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                node_id = row.get('Node_ID', '')
+                round_num = row.get('Round', '')
+                round_end_time = row.get('Round_End_Time_ms', '')
+                
+                if node_id != '' and round_num != '':
+                    all_rounds.add(int(round_num))
+                    all_nodes.add(int(node_id))
+                    # Store the round end time (relative time in ms), or empty string if not available
+                    round_node_end_time[int(round_num)][int(node_id)] = round_end_time if round_end_time else ''
+        
+        # Sort rounds and nodes
+        sorted_rounds = sorted(all_rounds)
+        sorted_nodes = sorted(all_nodes)
+        
+        # Write the pivot table
+        with open(output_filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+            
+            # Write header: Round, Node_0, Node_1, ..., Node_N
+            header = ['Round'] + [f'Node_{node_id}' for node_id in sorted_nodes]
+            writer.writerow(header)
+            
+            # Write data rows
+            for round_num in sorted_rounds:
+                row = [round_num]
+                for node_id in sorted_nodes:
+                    round_end = round_node_end_time[round_num].get(node_id, '')
+                    row.append(round_end)
+                writer.writerow(row)
+        
+        print(f"Round end time pivot table exported to: {output_filename}")
+        
+    except FileNotFoundError:
+        print(f"Warning: Could not find input file {csv_filename}")
+    except Exception as e:
+        print(f"Error generating pivot table: {e}")
+
+
 def main():
     """Main function to process all node logs."""
     num_nodes = 10
     csv_filename = 'round_certificate_analysis.csv'
+    pivot_filename = 'round_end_time_pivot.csv'
+    logs_dir = 'logs'
     
     print("=" * 80)
     print("Narwhal Log Analysis - Round and Certificate Extraction")
@@ -298,10 +390,15 @@ def main():
     print(f"Processing {num_nodes} nodes...\n")
     
     for node_id in range(num_nodes):
-        process_node_log(node_id, csv_filename, num_nodes)
+        process_node_log(node_id, csv_filename, num_nodes, logs_dir=logs_dir)
     
     print("=" * 80)
     print(f"Analysis complete! Results saved to: {csv_filename}")
+    
+    # Generate round end time pivot table
+    print("\nGenerating round end time pivot table...")
+    export_round_end_pivot_table(csv_filename, pivot_filename)
+    
     print("=" * 80)
 
 
