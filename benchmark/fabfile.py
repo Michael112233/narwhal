@@ -221,9 +221,9 @@ def cloudlab_remote(ctx, debug=False):
         'nodes': [4],
         'workers': 1,
         'collocate': True,
-        'rate': [220000],
+        'rate': [20000],
         'tx_size': 512,
-        'duration': 90,
+        'duration': 20,
         'runs': 1,
         # 'trigger_attack': [True], 
     }
