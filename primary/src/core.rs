@@ -9,7 +9,7 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -140,7 +140,7 @@ impl Core {
 
     #[async_recursion]
     async fn process_header(&mut self, header: &Header) -> DagResult<()> {
-        info!("Processing {:?}", header);
+        debug!("Processing {:?}", header);
         // Indicate that we are processing this header.
         self.processing
             .entry(header.round)
@@ -152,7 +152,7 @@ impl Core {
         // reschedule processing of this header.
         let parents = self.synchronizer.get_parents(header).await?;
         if parents.is_empty() {
-            info!("Processing of {} suspended: missing parent(s)", header.id);
+            debug!("Processing of {} suspended: missing parent(s)", header.id);
             return Ok(());
         }
 
@@ -173,7 +173,7 @@ impl Core {
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
         if self.synchronizer.missing_payload(header).await? {
-            info!("Processing of {} suspended: missing payload", header);
+            debug!("Processing of {} suspended: missing payload", header);
             return Ok(());
         }
 
@@ -190,7 +190,7 @@ impl Core {
         {
             // Make a vote and send it to the header's creator.
             let vote = Vote::new(header, &self.name, &mut self.signature_service).await;
-            info!("Created {:?}", vote);
+            debug!("Created {:?}", vote);
             if vote.origin == self.name {
                 self.process_vote(vote)
                     .await
@@ -215,14 +215,14 @@ impl Core {
 
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
-        info!("Processing {:?}", vote);
+        debug!("Processing {:?}", vote);
 
         // Add it to the votes' aggregator and try to make a new certificate.
         if let Some(certificate) =
             self.votes_aggregator
                 .append(vote, &self.committee, &self.current_header)?
         {
-            info!("Assembled {:?}", certificate);
+            debug!("Assembled {:?}", certificate);
 
             // Broadcast the certificate.
             let addresses = self
@@ -249,8 +249,8 @@ impl Core {
 
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
-        info!("Processing {:?}", certificate);
-        info!("Received certificate from network: round {}, origin: {}, digest: {}", certificate.round(), certificate.origin(), certificate.digest());
+        debug!("Processing {:?}", certificate);
+        debug!("Received certificate from network: round {}, origin: {}, digest: {}", certificate.round(), certificate.origin(), certificate.digest());
 
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
@@ -268,7 +268,7 @@ impl Core {
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
         if !self.synchronizer.deliver_certificate(&certificate).await? {
-            info!(
+            debug!(
                 "Processing of {:?} suspended: missing ancestors",
                 certificate
             );
@@ -394,7 +394,7 @@ impl Core {
                     error!("{}", e);
                     panic!("Storage failure: killing node.");
                 }
-                Err(e @ DagError::TooOld(..)) => info!("{}", e),
+                Err(e @ DagError::TooOld(..)) => debug!("{}", e),
                 Err(e) => warn!("{}", e),
             }
 

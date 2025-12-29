@@ -4,7 +4,9 @@ use crate::primary::Round;
 use config::{Committee, WorkerId};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
-use log::{debug, info};
+use log::debug;
+#[cfg(feature = "benchmark")]
+use log::info;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -86,7 +88,7 @@ impl Proposer {
             &mut self.signature_service,
         )
         .await;
-        info!("Created {:?}", header);
+        debug!("Created {:?}", header);
 
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
@@ -103,7 +105,7 @@ impl Proposer {
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
-        info!("Dag starting at round {}", self.round);
+        debug!("Dag starting at round {}", self.round);
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
@@ -135,7 +137,7 @@ impl Proposer {
 
                     // Advance to the next round.
                     self.round = round + 1;
-                    info!("Dag moved to round {}", self.round);
+                    debug!("Dag moved to round {}", self.round);
 
                     // Signal that we have enough parent certificates to propose a new header.
                     self.last_parents = parents;

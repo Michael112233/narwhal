@@ -49,7 +49,7 @@ impl<Handler: MessageHandler> Receiver<Handler> {
             .await
             .expect("Failed to bind TCP port");
 
-        info!("Listening on {}", self.address);
+        debug!("Listening on {}", self.address);
         loop {
             let (socket, peer) = match listener.accept().await {
                 Ok(value) => value,

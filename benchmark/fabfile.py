@@ -217,7 +217,7 @@ def cloudlab_install(ctx):
 
 
 @task
-def cloudlab_remote(ctx, debug=False):
+def cloudlab_remote(ctx, debug=True):
     ''' Run benchmarks on CloudLab '''
     bench_params = {
         'faults': 0,

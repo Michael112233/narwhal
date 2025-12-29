@@ -106,7 +106,7 @@ impl Consensus {
 
         // Listen to incoming certificates.
         while let Some(certificate) = self.rx_primary.recv().await {
-            info!("Processing {:?}", certificate);
+            debug!("Processing {:?}", certificate);
             let round = certificate.round();
 
             // Add the new certificate to the local storage.
@@ -150,12 +150,12 @@ impl Consensus {
             // the last committed leader, and commit all preceding leaders in the right order. Committing
             // a leader block means committing all its dependencies.
             if stake < self.committee.validity_threshold() {
-                info!("Leader {:?} does not have enough support", leader);
+                debug!("Leader {:?} does not have enough support", leader);
                 continue;
             }
 
             // Get an ordered list of past leaders that are linked to the current leader.
-            info!("Leader {:?} has enough support", leader);
+            debug!("Leader {:?} has enough support", leader);
             let mut sequence = Vec::new();
             for leader in self.order_leaders(leader, &state).iter().rev() {
                 // Starting from the oldest leader, flatten the sub-dag referenced by the leader.
@@ -171,7 +171,7 @@ impl Consensus {
             // Log the latest committed round of every authority (for debug).
             if log_enabled!(log::Level::Debug) {
                 for (name, round) in &state.last_committed {
-                    info!("Latest commit of {}: Round {}", name, round);
+                    debug!("Latest commit of {}: Round {}", name, round);
                 }
             }
 
@@ -259,13 +259,13 @@ impl Consensus {
     /// Flatten the dag referenced by the input certificate. This is a classic depth-first search (pre-order):
     /// https://en.wikipedia.org/wiki/Tree_traversal#Pre-order
     fn order_dag(&self, leader: &Certificate, state: &State) -> Vec<Certificate> {
-        info!("Processing sub-dag of {:?}", leader);
+        debug!("Processing sub-dag of {:?}", leader);
         let mut ordered = Vec::new();
         let mut already_ordered = HashSet::new();
 
         let mut buffer = vec![leader];
         while let Some(x) = buffer.pop() {
-            info!("Sequencing {:?}", x);
+            debug!("Sequencing {:?}", x);
             ordered.push(x.clone());
             for parent in &x.header.parents {
                 let (digest, certificate) = match state

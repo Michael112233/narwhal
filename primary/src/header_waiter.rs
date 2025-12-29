@@ -8,7 +8,7 @@ use crypto::{Digest, PublicKey};
 use futures::future::try_join_all;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
-use log::{debug, error, info};
+use log::{debug, error};
 use network::SimpleSender;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -129,7 +129,7 @@ impl HeaderWaiter {
                 Some(message) = self.rx_synchronizer.recv() => {
                     match message {
                         WaiterMessage::SyncBatches(missing, header) => {
-                            info!("Synching the payload of {}", header);
+                            debug!("Synching the payload of {}", header);
                             let header_id = header.id.clone();
                             let round = header.round;
                             let author = header.author;
@@ -174,7 +174,7 @@ impl HeaderWaiter {
                         }
 
                         WaiterMessage::SyncParents(missing, header) => {
-                            info!("Synching the parents of {}", header);
+                            debug!("Synching the parents of {}", header);
                             let header_id = header.id.clone();
                             let round = header.round;
                             let author = header.author;
@@ -255,7 +255,7 @@ impl HeaderWaiter {
                     let mut retry = Vec::new();
                     for (digest, (_, timestamp)) in &self.parent_requests {
                         if timestamp + (self.sync_retry_delay as u128) < now {
-                            info!("Requesting sync for certificate {} (retry)", digest);
+                            debug!("Requesting sync for certificate {} (retry)", digest);
                             retry.push(digest.clone());
                         }
                     }
