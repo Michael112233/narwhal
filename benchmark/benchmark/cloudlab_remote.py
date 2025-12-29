@@ -667,20 +667,34 @@ class CloudLabBench:
             # Source cargo environment before building (use $HOME which will be the actual user's home directory)
             'source $HOME/.cargo/env 2>/dev/null || export PATH=$HOME/.cargo/bin:$PATH',
             # Compile from the workspace root (we're already in narwhal directory)
-            # Remove --quiet to see compilation errors
+            # Clean and rebuild to ensure binaries are generated
+            'echo "Cleaning previous build..."',
+            'cargo clean --release 2>/dev/null || true',
             'echo "Starting compilation..."',
-            'cargo build --release --features benchmark 2>&1 || (echo "ERROR: Compilation failed with exit code $?" && exit 1)',
+            'cargo build --release --features benchmark --bin node --bin benchmark_client || (echo "ERROR: Compilation failed with exit code $?" && exit 1)',
             'echo "Compilation completed, checking for binaries..."',
+            # List all files in target/release to debug (ensure output is visible)
+            'echo "Files in target/release/:"',
+            'ls -la target/release/ 2>&1 | head -30',
+            'echo "Looking for executables:"',
+            'find target/release -maxdepth 1 -type f -executable 2>&1 | head -20',
             # Verify binaries were built (with better error messages)
-            f'test -f target/release/node || (echo "ERROR: node binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Contents of target/release/: $(ls -la target/release/ 2>/dev/null | head -20 || echo \"target/release/ does not exist\")" && exit 1)',
-            f'test -f target/release/benchmark_client || (echo "ERROR: benchmark_client binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Contents of target/release/: $(ls -la target/release/ 2>/dev/null | head -20 || echo \"target/release/ does not exist\")" && exit 1)',
+            'test -f target/release/node || (echo "ERROR: node binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Looking for node binary:" && find target/release -name "node" -type f 2>/dev/null || echo "node binary not found anywhere" && exit 1)',
+            'test -f target/release/benchmark_client || (echo "ERROR: benchmark_client binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Looking for benchmark_client binary:" && find target/release -name "benchmark_client" -type f 2>/dev/null || echo "benchmark_client binary not found anywhere" && exit 1)',
             # Create symlinks so ./node and ./benchmark_client work in the repo root
             # alias_binaries already handles removing existing files, but we need to handle the case where node is a directory
+            'echo "Creating symlinks..."',
             f'rm -rf node benchmark_client 2>/dev/null || true',
             CommandMaker.alias_binaries("./target/release/"),
-            # Verify symlinks were created
-            f'test -f node || (echo "ERROR: node symlink not created" && exit 1)',
-            f'test -f benchmark_client || (echo "ERROR: benchmark_client symlink not created" && exit 1)'
+            # Also create symlinks in benchmark directory for convenience
+            'mkdir -p benchmark 2>/dev/null || true',
+            'cd benchmark && rm -f node benchmark_client 2>/dev/null || true',
+            'cd benchmark && ln -sf ../target/release/node . && ln -sf ../target/release/benchmark_client . || true',
+            'cd ..',
+            # Verify symlinks were created (with better error messages)
+            'test -f node || (echo "ERROR: node symlink not created" && echo "Current directory: $(pwd)" && echo "Contents of current directory:" && ls -la | grep -E "(node|benchmark)" && echo "Trying to create symlink manually:" && ln -sf ./target/release/node . && exit 1)',
+            'test -f benchmark_client || (echo "ERROR: benchmark_client symlink not created" && echo "Current directory: $(pwd)" && echo "Contents of current directory:" && ls -la | grep -E "(node|benchmark)" && echo "Trying to create symlink manually:" && ln -sf ./target/release/benchmark_client . && exit 1)',
+            'echo "Symlinks created successfully"'
         ]
         
         # Modify attack.rs AFTER updating the code (so the file exists)
@@ -705,7 +719,15 @@ class CloudLabBench:
             for (username, port), hostnames in hosts_by_config.items():
                 conn_kwargs = self._get_connection_kwargs({})
                 g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=60)
-                g.run(' && '.join(cmd), hide=True)
+                # Don't hide output so we can see compilation and debugging messages
+                result = g.run(' && '.join(cmd), hide=False)
+                # Check for errors in the result
+                if isinstance(result, dict):
+                    for hostname, host_result in result.items():
+                        if not host_result.ok:
+                            Print.error(f'Failed on {hostname}: {host_result.stderr}')
+                elif not result.ok:
+                    Print.error(f'Command failed: {result.stderr}')
                 
                 # Modify attack.rs AFTER git operations (so the file exists)
                 if trigger_attack is not None:
@@ -768,8 +790,13 @@ class CloudLabBench:
                     remote_key_path = f'{repo_name}/{key_file}'
                     # Generate key using the compiled node binary
                     # The binary should exist after _update compiles the code
-                    cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_path}'
+                    # Try benchmark directory first, then repo root, then target/release
+                    cmd = f'cd {repo_name}/benchmark && ./node generate_keys --filename ../{key_file}'
                     result = conn.run(cmd, hide=True, warn=True)
+                    if not result.ok:
+                        # Try repo root
+                        cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_path}'
+                        result = conn.run(cmd, hide=True, warn=True)
                     if not result.ok:
                         # Try with target/release/node if ./node doesn't exist
                         cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_path}'
@@ -922,7 +949,8 @@ class CloudLabBench:
         c = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
         try:
             # First verify the repo directory and binaries exist
-            test_cmd = f'cd {repo_name} && test -f node && test -f benchmark_client && echo "Binaries found" || echo "Binaries missing"'
+            # Check both in repo root and benchmark directory
+            test_cmd = f'cd {repo_name} && (test -f node || test -f benchmark/node) && (test -f benchmark_client || test -f benchmark/benchmark_client) && echo "Binaries found" || echo "Binaries missing"'
             test_result = c.run(test_cmd, hide=True)
             if 'Binaries missing' in test_result.stdout:
                 Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}')
@@ -943,7 +971,13 @@ class CloudLabBench:
             # Write script with better error handling
             # Use relative path after cd to repo directory
             # log_file is already relative (e.g., "logs/client-0-0.log")
-            cleanup_store = f'rm -rf {store_path} 2>/dev/null || true' if store_path else ''
+            # store_path is relative to repo root, so if we're in benchmark/, use ../
+            if store_path and not store_path.startswith('/'):
+                cleanup_store = f'rm -rf ../{store_path} 2>/dev/null || true'
+            elif store_path:
+                cleanup_store = f'rm -rf {store_path} 2>/dev/null || true'
+            else:
+                cleanup_store = ''
             script_cmd = f'''cat > {script_path} << 'SCRIPTEOF'
 #!/bin/bash
 # Change to repo directory first
@@ -953,22 +987,29 @@ cd {repo_name} || {{
     exit 1
 }}
 
-# Ensure log directory exists (relative to repo directory)
-mkdir -p $(dirname {log_file}) 2>/dev/null || true
+# Change to benchmark directory where binaries are located
+cd benchmark || {{
+    echo "WARNING: Failed to cd to benchmark, trying repo root"
+    cd ..
+}}
+
+# Ensure log directory exists (relative to repo root, not benchmark directory)
+mkdir -p ../$(dirname {log_file}) 2>/dev/null || true
 
 # Cleanup database directory and lock files before starting
 {cleanup_store}
 
 # Check if binary exists (for client/worker/primary)
+# We're now in benchmark directory, so check here first, then fallback to parent
 if [[ "{name}" == client-* ]]; then
-    if [ ! -f "./benchmark_client" ] && [ ! -f "./target/release/benchmark_client" ]; then
+    if [ ! -f "./benchmark_client" ] && [ ! -f "../target/release/benchmark_client" ]; then
         echo "ERROR: benchmark_client not found" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
         echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
         exit 1
     fi
 elif [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
-    if [ ! -f "./node" ] && [ ! -f "./target/release/node" ]; then
+    if [ ! -f "./node" ] && [ ! -f "../target/release/node" ]; then
         echo "ERROR: node binary not found" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
         echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
@@ -978,8 +1019,8 @@ fi
 
 # Open log file and redirect stdout/stderr to it BEFORE exec
 # This ensures the file is created and opened before the process starts
-# Use relative path since we're already in the repo directory
-exec > {log_file} 2>&1
+# Use relative path from benchmark directory to repo root
+exec > ../{log_file} 2>&1
 
 # Execute the command
 # Use exec to replace shell with the actual process
