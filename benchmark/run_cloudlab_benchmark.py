@@ -125,13 +125,40 @@ def process_logs(faults=0, save_to_file=True):
         Print.warn(f'Error processing logs: {e}')
         return False
 
-def generate_round_end_time_pivot(num_nodes=10, experiment_group=None, logs_dir=None):
+def extract_rate_from_logs(logs_dir):
+    """Extract transaction rate from client log files.
+    
+    Args:
+        logs_dir: Directory containing log files
+    
+    Returns:
+        int or None: Transaction rate in tx/s, or None if not found
+    """
+    import re
+    import glob
+    from os.path import join
+    
+    # Try to find rate from any client log file
+    client_logs = sorted(glob.glob(join(logs_dir, 'client-*.log')))
+    for log_file in client_logs:
+        try:
+            with open(log_file, 'r') as f:
+                content = f.read()
+                match = re.search(r'Transactions rate: (\d+)', content)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            continue
+    return None
+
+def generate_round_end_time_pivot(num_nodes=10, experiment_group=None, logs_dir=None, rate=None):
     """Generate round_end_time_pivot.csv from log files.
     
     Args:
         num_nodes: Number of nodes to process
         experiment_group: Optional experiment group identifier (for multi-experiment support)
         logs_dir: Optional custom logs directory (default: uses PathMaker.logs_path() or 'logs')
+        rate: Optional transaction rate (if None, will try to extract from logs)
     
     Returns:
         bool: True if successful, False otherwise
@@ -159,13 +186,18 @@ def generate_round_end_time_pivot(num_nodes=10, experiment_group=None, logs_dir=
                 except:
                     logs_dir = 'logs'
             
-            # Determine output filenames based on experiment group
+            # Extract rate from logs if not provided
+            if rate is None:
+                rate = extract_rate_from_logs(logs_dir)
+            
+            # Determine output filenames based on experiment group and rate
+            rate_suffix = f'_rate{rate}' if rate is not None else ''
             if experiment_group is not None:
-                csv_filename = f'round_certificate_analysis_exp{experiment_group}.csv'
-                pivot_filename = f'round_end_time_pivot_exp{experiment_group}.csv'
+                csv_filename = f'round_certificate_analysis_exp{experiment_group}{rate_suffix}.csv'
+                pivot_filename = f'round_end_time_pivot_exp{experiment_group}{rate_suffix}.csv'
             else:
-                csv_filename = 'round_certificate_analysis.csv'
-                pivot_filename = 'round_end_time_pivot.csv'
+                csv_filename = f'round_certificate_analysis{rate_suffix}.csv'
+                pivot_filename = f'round_end_time_pivot{rate_suffix}.csv'
             
             # Remove existing CSV file if it exists (to start fresh)
             if os.path.exists(csv_filename):
@@ -299,7 +331,8 @@ Examples:
                 exp_success = generate_round_end_time_pivot(
                     num_nodes=args.num_nodes,
                     experiment_group=exp_group,
-                    logs_dir=exp_logs_dir
+                    logs_dir=exp_logs_dir,
+                    rate=None  # Will be extracted from logs
                 )
                 success = exp_success and success
         else:
@@ -307,7 +340,8 @@ Examples:
             pivot_success = generate_round_end_time_pivot(
                 num_nodes=args.num_nodes,
                 experiment_group=None,
-                logs_dir=args.logs_dir
+                logs_dir=args.logs_dir,
+                rate=None  # Will be extracted from logs
             )
             success = pivot_success and success
     

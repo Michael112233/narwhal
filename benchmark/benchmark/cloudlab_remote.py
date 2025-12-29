@@ -17,6 +17,8 @@ from copy import deepcopy
 import subprocess
 import re
 import shlex
+import sys
+import shutil
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker
@@ -681,19 +683,25 @@ class CloudLabBench:
             # Verify binaries were built (with better error messages)
             'test -f target/release/node || (echo "ERROR: node binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Looking for node binary:" && find target/release -name "node" -type f 2>/dev/null || echo "node binary not found anywhere" && exit 1)',
             'test -f target/release/benchmark_client || (echo "ERROR: benchmark_client binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Looking for benchmark_client binary:" && find target/release -name "benchmark_client" -type f 2>/dev/null || echo "benchmark_client binary not found anywhere" && exit 1)',
-            # Create symlinks so ./node and ./benchmark_client work in the repo root
-            # alias_binaries already handles removing existing files, but we need to handle the case where node is a directory
+            # Create symlinks:
+            # - benchmark_client in narwhal/ root
+            # - node in narwhal/node/ directory
+            # IMPORTANT: Do NOT delete the node/ directory (it contains source code)
+            # Only remove the node/node symlink/file if it exists
             'echo "Creating symlinks..."',
-            f'rm -rf node benchmark_client 2>/dev/null || true',
-            CommandMaker.alias_binaries("./target/release/"),
-            # Also create symlinks in benchmark directory for convenience
-            'mkdir -p benchmark 2>/dev/null || true',
-            'cd benchmark && rm -f node benchmark_client 2>/dev/null || true',
-            'cd benchmark && ln -sf ../target/release/node . && ln -sf ../target/release/benchmark_client . || true',
-            'cd ..',
+            # Remove old symlinks/files if they exist (but preserve node/ directory)
+            'rm -f benchmark_client 2>/dev/null || true',
+            # Only remove node/node if it's a file or symlink (not a directory)
+            # This preserves the node/ directory which contains source code
+            '[ ! -d node/node ] && rm -f node/node 2>/dev/null || true',
+            # Create benchmark_client symlink in repo root
+            'ln -sf ./target/release/benchmark_client ./benchmark_client',
+            # Create node symlink in node/ directory (node/ directory must exist and not be deleted)
+            'mkdir -p node 2>/dev/null || true',
+            'ln -sf ../target/release/node ./node/node',
             # Verify symlinks were created (with better error messages)
-            'test -f node || (echo "ERROR: node symlink not created" && echo "Current directory: $(pwd)" && echo "Contents of current directory:" && ls -la | grep -E "(node|benchmark)" && echo "Trying to create symlink manually:" && ln -sf ./target/release/node . && exit 1)',
-            'test -f benchmark_client || (echo "ERROR: benchmark_client symlink not created" && echo "Current directory: $(pwd)" && echo "Contents of current directory:" && ls -la | grep -E "(node|benchmark)" && echo "Trying to create symlink manually:" && ln -sf ./target/release/benchmark_client . && exit 1)',
+            'test -f benchmark_client || (echo "ERROR: benchmark_client symlink not created in repo root" && echo "Current directory: $(pwd)" && echo "Contents of current directory:" && ls -la | grep -E "benchmark" && exit 1)',
+            'test -f node/node || (echo "ERROR: node symlink not created in node/ directory" && echo "Current directory: $(pwd)" && echo "Contents of node directory:" && ls -la node/ | head -10 && exit 1)',
             'echo "Symlinks created successfully"'
         ]
         
@@ -789,16 +797,12 @@ class CloudLabBench:
                     # Use absolute path for key file on remote
                     remote_key_path = f'{repo_name}/{key_file}'
                     # Generate key using the compiled node binary
-                    # The binary should exist after _update compiles the code
-                    # Try benchmark directory first, then repo root, then target/release
-                    cmd = f'cd {repo_name}/benchmark && ./node generate_keys --filename ../{key_file}'
+                    # node binary is in node/ directory, benchmark_client is in repo root
+                    # Try node/node first, then fallback to target/release/node
+                    cmd = f'cd {repo_name} && ./node/node generate_keys --filename {remote_key_path}'
                     result = conn.run(cmd, hide=True, warn=True)
                     if not result.ok:
-                        # Try repo root
-                        cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_path}'
-                        result = conn.run(cmd, hide=True, warn=True)
-                    if not result.ok:
-                        # Try with target/release/node if ./node doesn't exist
+                        # Try with target/release/node if ./node/node doesn't exist
                         cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_path}'
                         result = conn.run(cmd, hide=True)
                     
@@ -906,12 +910,17 @@ class CloudLabBench:
         
         try:
             run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
-            anaconda_python = '/Users/michael/opt/anaconda3/bin/python3'
+            # Use system Python instead of hardcoded path
+            import shutil
+            python_cmd = shutil.which('python3') or sys.executable
+            if not python_cmd:
+                Print.warn('⚠ Could not find python3, skipping run_cloudlab_benchmark.py')
+                return
             
             if run_benchmark_script.exists():
                 Print.info('Running run_cloudlab_benchmark.py --no-run to process logs...')
                 result = subprocess.run(
-                    [anaconda_python, str(run_benchmark_script), '--no-run'],
+                    [python_cmd, str(run_benchmark_script), '--no-run'],
                     cwd=str(benchmark_dir),
                     capture_output=False,  # Show output in real-time
                     text=True
@@ -949,8 +958,8 @@ class CloudLabBench:
         c = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
         try:
             # First verify the repo directory and binaries exist
-            # Check both in repo root and benchmark directory
-            test_cmd = f'cd {repo_name} && (test -f node || test -f benchmark/node) && (test -f benchmark_client || test -f benchmark/benchmark_client) && echo "Binaries found" || echo "Binaries missing"'
+            # benchmark_client should be in repo root, node should be in node/ directory
+            test_cmd = f'cd {repo_name} && test -f benchmark_client && test -f node/node && echo "Binaries found" || echo "Binaries missing"'
             test_result = c.run(test_cmd, hide=True)
             if 'Binaries missing' in test_result.stdout:
                 Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}')
@@ -968,13 +977,18 @@ class CloudLabBench:
             store_match = re.search(r'--store\s+(\S+)', command)
             store_path = store_match.group(1) if store_match else None
             
+            # Modify command for worker/primary: replace ./node with ./node/node
+            # For client, command stays as-is (uses ./benchmark_client in repo root)
+            if name.startswith('worker-') or name.startswith('primary-'):
+                command_modified = command.replace('./node ', './node/node ')
+            else:
+                command_modified = command
+            
             # Write script with better error handling
             # Use relative path after cd to repo directory
             # log_file is already relative (e.g., "logs/client-0-0.log")
-            # store_path is relative to repo root, so if we're in benchmark/, use ../
-            if store_path and not store_path.startswith('/'):
-                cleanup_store = f'rm -rf ../{store_path} 2>/dev/null || true'
-            elif store_path:
+            # store_path is relative to repo root (we're running in repo root now)
+            if store_path:
                 cleanup_store = f'rm -rf {store_path} 2>/dev/null || true'
             else:
                 cleanup_store = ''
@@ -987,44 +1001,44 @@ cd {repo_name} || {{
     exit 1
 }}
 
-# Change to benchmark directory where binaries are located
-cd benchmark || {{
-    echo "WARNING: Failed to cd to benchmark, trying repo root"
-    cd ..
-}}
-
-# Ensure log directory exists (relative to repo root, not benchmark directory)
-mkdir -p ../$(dirname {log_file}) 2>/dev/null || true
+# Ensure log directory exists (relative to repo root)
+mkdir -p $(dirname {log_file}) 2>/dev/null || true
 
 # Cleanup database directory and lock files before starting
 {cleanup_store}
 
 # Check if binary exists (for client/worker/primary)
-# We're now in benchmark directory, so check here first, then fallback to parent
+# benchmark_client is in repo root, node is in node/ directory
 if [[ "{name}" == client-* ]]; then
-    if [ ! -f "./benchmark_client" ] && [ ! -f "../target/release/benchmark_client" ]; then
-        echo "ERROR: benchmark_client not found" | tee {log_file}
+    if [ ! -f "./benchmark_client" ] && [ ! -f "./target/release/benchmark_client" ]; then
+        echo "ERROR: benchmark_client not found in repo root" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
-        echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
+        echo "Files in current dir: $(ls -la | grep benchmark | head -10)" | tee -a {log_file}
         exit 1
     fi
 elif [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
-    if [ ! -f "./node" ] && [ ! -f "../target/release/node" ]; then
-        echo "ERROR: node binary not found" | tee {log_file}
+    if [ ! -f "./node/node" ] && [ ! -f "./target/release/node" ]; then
+        echo "ERROR: node binary not found in node/ directory" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
-        echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
+        echo "Contents of node directory: $(ls -la node/ 2>/dev/null | head -10)" | tee -a {log_file}
         exit 1
     fi
 fi
 
 # Open log file and redirect stdout/stderr to it BEFORE exec
 # This ensures the file is created and opened before the process starts
-# Use relative path from benchmark directory to repo root
-exec > ../{log_file} 2>&1
+exec > {log_file} 2>&1
 
 # Execute the command
-# Use exec to replace shell with the actual process
-exec {command}
+# Replace ./node with ./node/node for worker/primary commands
+# benchmark_client is already in repo root, so no change needed
+if [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
+    # Use modified command with ./node/node
+    exec {command_modified}
+else
+    # For client, use command as-is (benchmark_client is in repo root)
+    exec {command}
+fi
 SCRIPTEOF'''
             script_write_result = c.run(script_cmd, hide=True, warn=True)
             if not script_write_result.ok:
@@ -1218,11 +1232,63 @@ SCRIPTEOF'''
                 log_file = PathMaker.worker_log_file(i, id)
                 self._background_run(host_info, cmd, log_file)
 
-        # 5. Wait for all transactions to be processed (progress output)
+        # 5. Wait for all transactions to be processed (progress output with log monitoring)
         duration = bench_parameters.duration
         Print.info(f'Running benchmark ({duration} sec)...')
+        
+        # Monitor logs for new round information (similar to local execution)
+        repo_name = self.settings.repo_name
+        last_line_counts = {}  # Track last line count per node to show only new lines
+        
         for i in range(20):
             sleep(ceil(duration / 20))
+            
+            # Check for new log lines every iteration (to show round information like local)
+            for j, address in enumerate(committee.primary_addresses(faults)):
+                host_info = self._get_host_by_address(address, selected_hosts)
+                if not host_info:
+                    continue
+                
+                try:
+                    log_file = PathMaker.primary_log_file(j)
+                    remote_log = f'{repo_name}/{log_file}'
+                    username = host_info.get('username', 'root')
+                    hostname = host_info['hostname']
+                    port = host_info.get('port', 22)
+                    conn_kwargs = self._get_connection_kwargs({})
+                    
+                    c = Connection(hostname, user=username, port=port, 
+                                 connect_kwargs=conn_kwargs, connect_timeout=10)
+                    
+                    # Get current line count
+                    line_count_cmd = f'test -f {remote_log} && wc -l < {remote_log} || echo 0'
+                    line_count_result = c.run(line_count_cmd, hide=True, warn=True, timeout=5)
+                    
+                    if line_count_result.ok:
+                        current_count = int(line_count_result.stdout.strip() or 0)
+                        last_count = last_line_counts.get(j, 0)
+                        
+                        # Show new lines (especially those containing round information)
+                        if current_count > last_count:
+                            # Get new lines
+                            new_lines_cmd = f'test -f {remote_log} && tail -n +{last_count + 1} {remote_log} | tail -20 || echo ""'
+                            new_lines_result = c.run(new_lines_cmd, hide=True, warn=True, timeout=5)
+                            
+                            if new_lines_result.ok and new_lines_result.stdout.strip():
+                                new_lines = new_lines_result.stdout.strip().split('\n')
+                                for line in new_lines:
+                                    if line.strip():
+                                        # Show lines containing round, committed, or created (similar to local output)
+                                        if any(keyword in line.lower() for keyword in ['round', 'committed', 'created', 'dag']):
+                                            Print.info(f'  Node {j}: {line[:120]}')  # Show first 120 chars
+                            
+                            last_line_counts[j] = current_count
+                    
+                    c.close()
+                except Exception:
+                    pass  # Ignore errors in log monitoring
+            
+            # Show progress every 5 iterations
             if (i + 1) % 5 == 0:
                 Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
 
@@ -1303,11 +1369,63 @@ SCRIPTEOF'''
                 log_file = PathMaker.worker_log_file(i, id)
                 self._background_run(host_info, cmd, log_file)
 
-        # 5. Wait for all transactions to be processed (progress output)
+        # 5. Wait for all transactions to be processed (progress output with log monitoring)
         duration = bench_parameters.duration
         Print.info(f'Running benchmark ({duration} sec)...')
+        
+        # Monitor logs for new round information (similar to local execution)
+        repo_name = self.settings.repo_name
+        last_line_counts = {}  # Track last line count per node to show only new lines
+        
         for i in range(20):
             sleep(ceil(duration / 20))
+            
+            # Check for new log lines every iteration (to show round information like local)
+            for j, address in enumerate(committee.primary_addresses(faults)):
+                host_info = self._get_host_by_address(address, selected_hosts)
+                if not host_info:
+                    continue
+                
+                try:
+                    log_file = PathMaker.primary_log_file(j)
+                    remote_log = f'{repo_name}/{log_file}'
+                    username = host_info.get('username', 'root')
+                    hostname = host_info['hostname']
+                    port = host_info.get('port', 22)
+                    conn_kwargs = self._get_connection_kwargs({})
+                    
+                    c = Connection(hostname, user=username, port=port, 
+                                 connect_kwargs=conn_kwargs, connect_timeout=10)
+                    
+                    # Get current line count
+                    line_count_cmd = f'test -f {remote_log} && wc -l < {remote_log} || echo 0'
+                    line_count_result = c.run(line_count_cmd, hide=True, warn=True, timeout=5)
+                    
+                    if line_count_result.ok:
+                        current_count = int(line_count_result.stdout.strip() or 0)
+                        last_count = last_line_counts.get(j, 0)
+                        
+                        # Show new lines (especially those containing round information)
+                        if current_count > last_count:
+                            # Get new lines
+                            new_lines_cmd = f'test -f {remote_log} && tail -n +{last_count + 1} {remote_log} | tail -20 || echo ""'
+                            new_lines_result = c.run(new_lines_cmd, hide=True, warn=True, timeout=5)
+                            
+                            if new_lines_result.ok and new_lines_result.stdout.strip():
+                                new_lines = new_lines_result.stdout.strip().split('\n')
+                                for line in new_lines:
+                                    if line.strip():
+                                        # Show lines containing round, committed, or created (similar to local output)
+                                        if any(keyword in line.lower() for keyword in ['round', 'committed', 'created', 'dag']):
+                                            Print.info(f'  Node {j}: {line[:120]}')  # Show first 120 chars
+                            
+                            last_line_counts[j] = current_count
+                    
+                    c.close()
+                except Exception:
+                    pass  # Ignore errors in log monitoring
+            
+            # Show progress every 5 iterations
             if (i + 1) % 5 == 0:
                 Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
 
