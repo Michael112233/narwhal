@@ -125,7 +125,7 @@ impl Synchronizer {
                             match self.store.read(digest.to_vec()).await {
                                 Ok(None) => {
                                     missing.push(digest.clone());
-                                    debug!("Requesting sync for batch {}", digest);
+                                    info!("Requesting sync for batch {}", digest);
                                 },
                                 Ok(Some(_)) => {
                                     // The batch arrived in the meantime: no need to request it.
@@ -201,7 +201,7 @@ impl Synchronizer {
                     let mut retry = Vec::new();
                     for (digest, (_, _, timestamp)) in &self.pending {
                         if timestamp + (self.sync_retry_delay as u128) < now {
-                            debug!("Requesting sync for batch {} (retry)", digest);
+                            info!("Requesting sync for batch {} (retry)", digest);
                             retry.push(digest.clone());
                         }
                     }

@@ -88,7 +88,7 @@ impl Proposer {
             &mut self.signature_service,
         )
         .await;
-        debug!("Created {:?}", header);
+        info!("Created {:?}", header);
 
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
@@ -105,7 +105,7 @@ impl Proposer {
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
-        debug!("Dag starting at round {}", self.round);
+        info!("Dag starting at round {}", self.round);
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
@@ -137,7 +137,7 @@ impl Proposer {
 
                     // Advance to the next round.
                     self.round = round + 1;
-                    debug!("Dag moved to round {}", self.round);
+                    info!("Dag moved to round {}", self.round);
 
                     // Signal that we have enough parent certificates to propose a new header.
                     self.last_parents = parents;
