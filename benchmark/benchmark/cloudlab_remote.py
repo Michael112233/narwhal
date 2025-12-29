@@ -655,16 +655,32 @@ class CloudLabBench:
         branch = self.settings.branch
         
         cmd = [
-            f'cd {repo_name} || (echo "Repository {repo_name} not found. Please run: fab cloudlab-install" && exit 1)',
+            # First ensure we're in home directory, then cd to repo
+            f'cd $HOME/{repo_name} || (echo "Repository $HOME/{repo_name} not found. Please run: fab cloudlab-install" && exit 1)',
             'git fetch',
             f'git checkout {branch}',
             'git pull',
-            # Source cargo environment before building
-            'source $HOME/.cargo/env || export PATH=$HOME/.cargo/bin:$PATH',
-            'cargo build --release --features benchmark',
-            # Create symlinks so ./node and ./benchmark_client work
-            # Remove any existing node directory or file first (node is also a crate directory)
-            f'rm -rf node benchmark_client 2>/dev/null ; {CommandMaker.alias_binaries("./target/release/")}'
+            # Verify essential files exist before compiling
+            'test -f node/Cargo.toml || (echo "ERROR: node/Cargo.toml not found - branch may be missing files" && exit 1)',
+            'test -f node/src/main.rs || (echo "ERROR: node/src/main.rs not found - branch may be missing files" && exit 1)',
+            'test -f Cargo.toml || (echo "ERROR: Workspace Cargo.toml not found" && exit 1)',
+            # Source cargo environment before building (use $HOME which will be the actual user's home directory)
+            'source $HOME/.cargo/env 2>/dev/null || export PATH=$HOME/.cargo/bin:$PATH',
+            # Compile from the workspace root (we're already in narwhal directory)
+            # Remove --quiet to see compilation errors
+            'echo "Starting compilation..."',
+            'cargo build --release --features benchmark 2>&1 || (echo "ERROR: Compilation failed with exit code $?" && exit 1)',
+            'echo "Compilation completed, checking for binaries..."',
+            # Verify binaries were built (with better error messages)
+            f'test -f target/release/node || (echo "ERROR: node binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Contents of target/release/: $(ls -la target/release/ 2>/dev/null | head -20 || echo \"target/release/ does not exist\")" && exit 1)',
+            f'test -f target/release/benchmark_client || (echo "ERROR: benchmark_client binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Contents of target/release/: $(ls -la target/release/ 2>/dev/null | head -20 || echo \"target/release/ does not exist\")" && exit 1)',
+            # Create symlinks so ./node and ./benchmark_client work in the repo root
+            # alias_binaries already handles removing existing files, but we need to handle the case where node is a directory
+            f'rm -rf node benchmark_client 2>/dev/null || true',
+            CommandMaker.alias_binaries("./target/release/"),
+            # Verify symlinks were created
+            f'test -f node || (echo "ERROR: node symlink not created" && exit 1)',
+            f'test -f benchmark_client || (echo "ERROR: benchmark_client symlink not created" && exit 1)'
         ]
         
         # Modify attack.rs AFTER updating the code (so the file exists)
@@ -1172,6 +1188,91 @@ SCRIPTEOF'''
         # 6. Kill processes but keep logs (same intent as Bench._run_single)
         self.kill(hosts=selected_hosts, delete_logs=False)
     
+    def _run_single_imbalanced(self, imbalanced_rate_list, committee, bench_parameters, selected_hosts, debug=False):
+        """Run a single benchmark with imbalanced rates (different rate per node)"""
+        from math import ceil
+        from time import sleep
+
+        faults = bench_parameters.faults
+
+        # 1. Kill any potentially unfinished run and delete logs
+        Print.info('Killing any existing processes and ports...')
+        self.kill(hosts=selected_hosts, delete_logs=True, committee=committee, faults=faults)
+
+        # Small delay to ensure processes are killed and database cleanup completes
+        sleep(3)
+
+        # Pre-compute workers' addresses (filtered for faults)
+        workers_addresses = committee.workers_addresses(faults)
+
+        # 2. Run the clients first with imbalanced rates
+        Print.info('Booting clients...')
+        client_rates = imbalanced_rate_list
+        for i, addresses in enumerate(workers_addresses):
+            for (id, address) in addresses:
+                host_info = self._get_host_by_address(address, selected_hosts)
+                if not host_info:
+                    Print.warn(f'Could not find host for address {address}')
+                    continue
+
+                cmd = CommandMaker.run_client(
+                    address,
+                    bench_parameters.tx_size,
+                    client_rates[i],
+                    [x for y in workers_addresses for _, x in y]
+                )
+                log_file = PathMaker.client_log_file(i, id)
+                self._background_run(host_info, cmd, log_file)
+
+        # 3. Run the primaries (except the faulty ones)
+        Print.info('Booting primaries...')
+        for i, address in enumerate(committee.primary_addresses(faults)):
+            host_info = self._get_host_by_address(address, selected_hosts)
+            if not host_info:
+                Print.warn(f'Could not find host for address {address}')
+                continue
+
+            cmd = CommandMaker.run_primary(
+                PathMaker.key_file(i),
+                PathMaker.committee_file(),
+                PathMaker.db_path(i),
+                PathMaker.parameters_file(),
+                debug=debug
+            )
+            log_file = PathMaker.primary_log_file(i)
+            self._background_run(host_info, cmd, log_file)
+
+        # 4. Run the workers (except the faulty ones)
+        Print.info('Booting workers...')
+        for i, addresses in enumerate(workers_addresses):
+            for (id, address) in addresses:
+                host_info = self._get_host_by_address(address, selected_hosts)
+                if not host_info:
+                    Print.warn(f'Could not find host for address {address}')
+                    continue
+
+                cmd = CommandMaker.run_worker(
+                    PathMaker.key_file(i),
+                    PathMaker.committee_file(),
+                    PathMaker.db_path(i, id),
+                    PathMaker.parameters_file(),
+                    id,  # The worker's id.
+                    debug=debug
+                )
+                log_file = PathMaker.worker_log_file(i, id)
+                self._background_run(host_info, cmd, log_file)
+
+        # 5. Wait for all transactions to be processed (progress output)
+        duration = bench_parameters.duration
+        Print.info(f'Running benchmark ({duration} sec)...')
+        for i in range(20):
+            sleep(ceil(duration / 20))
+            if (i + 1) % 5 == 0:
+                Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
+
+        # 6. Kill processes but keep logs
+        self.kill(hosts=selected_hosts, delete_logs=False)
+    
     def _check_stderr(self, output):
         """Check for errors in command output"""
         if isinstance(output, dict):
@@ -1223,7 +1324,13 @@ SCRIPTEOF'''
         
         # Run benchmarks for each combination of parameters
         for n in bench_parameters.nodes:
-            for rate in bench_parameters.rate:
+            if bench_parameters.rate_type == 'balanced':
+                rate_list = bench_parameters.rate
+            else:  # imbalanced
+                # For imbalanced, we run once with the imbalanced_rate list
+                rate_list = [bench_parameters.imbalanced_rate]
+            
+            for rate in rate_list:
                 for trigger_attack in trigger_attack_list:
                     # Update nodes (this will also modify attack.rs if trigger_attack is specified)
                     try:
@@ -1251,13 +1358,24 @@ SCRIPTEOF'''
                     # Run benchmarks for this configuration
                     for run in range(bench_parameters.runs):
                         attack_str = f", attack={'ON' if trigger_attack else 'OFF'}" if trigger_attack is not None else ""
-                        Print.heading(f'\nRunning benchmark: nodes={n}, rate={rate}{attack_str}, run={run+1}/{bench_parameters.runs}')
+                        if bench_parameters.rate_type == 'balanced':
+                            rate_str = f'rate={rate}'
+                            rate_for_file = rate
+                        else:  # imbalanced
+                            rate_str = f'imbalanced_rates={rate}'
+                            rate_for_file = sum(rate) if isinstance(rate, list) else rate
+                        Print.heading(f'\nRunning benchmark: nodes={n}, {rate_str}{attack_str}, run={run+1}/{bench_parameters.runs}')
                         
                         try:
                             # Run the actual benchmark
-                            self._run_single(
-                                rate, committee_copy, bench_parameters, selected_hosts, debug
-                            )
+                            if bench_parameters.rate_type == 'balanced':
+                                self._run_single(
+                                    rate, committee_copy, bench_parameters, selected_hosts, debug
+                                )
+                            else:  # imbalanced
+                                self._run_single_imbalanced(
+                                    rate, committee_copy, bench_parameters, selected_hosts, debug
+                                )
                             
                             # Download and parse logs
                             result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
@@ -1266,7 +1384,7 @@ SCRIPTEOF'''
                                 n,
                                 bench_parameters.workers,
                                 bench_parameters.collocate,
-                                rate,
+                                rate_for_file,
                                 bench_parameters.tx_size,
                             ))
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:

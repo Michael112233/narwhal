@@ -20,8 +20,4 @@ cd benchmark
 pip install boto3
 pip install matplotlib
 sudo -s
-apt install fabric
-exit
-
-fab local
-
+sudo apt install fabric

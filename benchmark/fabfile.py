@@ -27,9 +27,11 @@ def local(ctx, debug=True):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'faults': 0,
-        'nodes': 4,
+        'nodes': 10,
         'workers': 1,
-        'rate': 35000,
+        'rate_type': 'imbalanced',
+        # 'rate': 100000,
+        'imbalanced_rate': [20, 20, 20, 20, 20, 10000, 10000, 10000, 10000, 10000],
         'tx_size': 512,
         'duration': 90,
         'trigger_attack': True
@@ -127,6 +129,7 @@ def remote(ctx, debug=False):
         'nodes': 10,
         'workers': 1,
         'collocate': True,
+        'rate_type': 'balanced',
         'rate': 100_000,
         'tx_size': 512,
         'duration': 20,
@@ -218,12 +221,13 @@ def cloudlab_remote(ctx, debug=False):
     ''' Run benchmarks on CloudLab '''
     bench_params = {
         'faults': 0,
-        'nodes': [4],
+        'nodes': [10],
         'workers': 1,
         'collocate': True,
-        'rate': [20000],
+        'rate_type': 'imbalanced',
+        'imbalanced_rate': [20, 20, 20, 20, 20, 10000, 10000, 10000, 10000, 10000],
         'tx_size': 512,
-        'duration': 20,
+        'duration': 120,
         'runs': 1,
         # 'trigger_attack': [True], 
     }
