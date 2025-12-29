@@ -589,7 +589,8 @@ class CloudLabBench:
         if bench_parameters.collocate:
             nodes = max(bench_parameters.nodes)
             if len(host_info) < nodes:
-                raise BenchError(f'Not enough hosts: need {nodes}, have {len(host_info)}')
+                error_msg = f'Not enough hosts: need {nodes}, have {len(host_info)}'
+                raise BenchError(error_msg, ValueError(error_msg))
             return host_info[:nodes]
         else:
             # One node per machine (primary + workers on separate machines)
@@ -597,7 +598,8 @@ class CloudLabBench:
             workers = bench_parameters.workers
             total_machines = nodes * (1 + workers)  # primary + workers
             if len(host_info) < total_machines:
-                raise BenchError(f'Not enough hosts: need {total_machines}, have {len(host_info)}')
+                error_msg = f'Not enough hosts: need {total_machines}, have {len(host_info)}'
+                raise BenchError(error_msg, ValueError(error_msg))
             return host_info[:total_machines]
     
     def _modify_attack_rs(self, hosts, trigger_attack):
@@ -713,26 +715,91 @@ class CloudLabBench:
         key_files = [PathMaker.key_file(i) for i in range(len(hosts))]
         local_compilation_success = False
         
-        try:
-            # Recompile the latest code (same as remote.py)
-            cmd = CommandMaker.compile().split()
-            subprocess.run(cmd, check=True, cwd=PathMaker.node_crate_path())
-            local_compilation_success = True
-            
-            # Create alias for the client and nodes binary (same as remote.py)
-            cmd = CommandMaker.alias_binaries(PathMaker.binary_path())
-            subprocess.run([cmd], shell=True)
-            
-            # Generate keys locally
-            for filename in key_files:
-                cmd = CommandMaker.generate_key(filename).split()
-                subprocess.run(cmd, check=True)
-                keys += [Key.from_file(filename)]
+        # Check if node binary exists before attempting local compilation
+        # PathMaker paths are relative to benchmark/ directory (not benchmark/benchmark/)
+        # So '../target/release' means 'target/release' from project root
+        # And '../node' means 'node' from project root
+        node_crate_path = PathMaker.node_crate_path()
+        binary_path = PathMaker.binary_path()
+        
+        # Check multiple possible locations for node binary
+        # Code runs from benchmark/ directory
+        # 1. ../target/release/node (actual binary from project root)
+        # 2. ./node (symlink in benchmark/ directory if exists)
+        # 3. node (if in current directory)
+        import os
+        current_dir = Path.cwd()
+        node_paths = [
+            '../target/release/node',  # From benchmark/ to project root
+            './node',  # Symlink in benchmark/ directory
+            'node',  # If in current directory
+            str(Path(binary_path) / 'node')  # Using PathMaker path
+        ]
+        
+        # Check if any path exists (using os.path for proper symlink resolution)
+        node_exists = False
+        for path_str in node_paths:
+            # First check if path exists at all (including broken symlinks)
+            if os.path.lexists(path_str):
+                # If it's a symlink, we need to resolve it relative to the symlink's directory
+                if os.path.islink(path_str):
+                    # Get the symlink's directory and resolve the target relative to it
+                    symlink_dir = os.path.dirname(os.path.abspath(path_str))
+                    target = os.readlink(path_str)
+                    # Resolve target relative to symlink directory
+                    if not os.path.isabs(target):
+                        resolved = os.path.normpath(os.path.join(symlink_dir, target))
+                    else:
+                        resolved = target
+                    if os.path.exists(resolved) and os.path.isfile(resolved):
+                        node_exists = True
+                        break
+                # If it's a regular file, it exists
+                elif os.path.isfile(path_str):
+                    node_exists = True
+                    break
+            # Also check with exists() for non-symlink files
+            elif os.path.exists(path_str) and os.path.isfile(path_str):
+                node_exists = True
+                break
+        
+        if not node_exists:
+            Print.info('Node binary not found locally, will generate keys on remote nodes...')
+        else:
+            try:
+                # Recompile the latest code (same as remote.py)
+                # node_crate_path from PathMaker is '../node' relative to benchmark/ directory
+                # This is correct: from benchmark/ to project root/node
+                cmd = CommandMaker.compile().split()
+                subprocess.run(cmd, check=True, cwd=node_crate_path)
+                local_compilation_success = True
                 
-        except (FileNotFoundError, subprocess.CalledProcessError) as e:
-            # If cargo is not available locally (e.g., on Windows), generate keys on remote nodes
-            Print.warn(f'Local compilation failed (this is OK if cargo is not available): {e}')
+                # Create alias for the client and nodes binary (same as remote.py)
+                # This creates symlinks in the current directory (benchmark/)
+                # binary_path is '../target/release' relative to benchmark/ directory
+                # This is correct: from benchmark/ to project root/target/release
+                cmd = CommandMaker.alias_binaries(binary_path)
+                subprocess.run([cmd], shell=True)
+                
+                # Generate keys locally
+                # CommandMaker.generate_key uses './node', so we need to be in a directory where ./node exists
+                # After alias_binaries, ./node should exist in current directory (benchmark/)
+                # Get the current working directory (benchmark/)
+                current_dir = Path.cwd()
+                for filename in key_files:
+                    cmd = CommandMaker.generate_key(filename).split()
+                    # Run from current directory where ./node should exist after alias_binaries
+                    subprocess.run(cmd, check=True, cwd=current_dir)
+                    keys += [Key.from_file(filename)]
+                    
+            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                # If cargo is not available locally (e.g., on Windows), generate keys on remote nodes
+                Print.warn(f'Local compilation failed (this is OK if cargo is not available): {e}')
+                Print.info('Generating keys on remote nodes instead...')
+        
+        if not local_compilation_success:
             Print.info('Generating keys on remote nodes instead...')
+            Print.info(f'Need to generate {len(key_files)} key files for {len(hosts)} hosts')
             
             # Generate keys on the first remote host (they're the same for all)
             repo_name = self.settings.repo_name
@@ -743,35 +810,97 @@ class CloudLabBench:
             conn_kwargs = self._get_connection_kwargs({})
             
             try:
+                Print.info(f'Connecting to {username}@{hostname}:{port} to generate keys...')
                 conn = Connection(hostname, user=username, port=port, 
                                  connect_kwargs=conn_kwargs, connect_timeout=30)
+                conn.open()
                 
                 # Generate keys on remote node (code should already be compiled from _update)
                 for i, key_file in enumerate(key_files):
+                    Print.info(f'Generating key {i+1}/{len(key_files)}: {key_file}')
                     # Use absolute path for key file on remote
                     remote_key_path = f'{repo_name}/{key_file}'
                     # Generate key using the compiled node binary
                     # The binary should exist after _update compiles the code
                     cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_path}'
+                    Print.info(f'Running command: {cmd}')
                     result = conn.run(cmd, hide=True, warn=True)
                     if not result.ok:
                         # Try with target/release/node if ./node doesn't exist
+                        Print.info(f'First attempt failed, trying with target/release/node...')
                         cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_path}'
                         result = conn.run(cmd, hide=True)
                     
+                    if not result.ok:
+                        error_msg = f'Failed to generate key file {key_file} on remote node: {result.stderr}'
+                        Print.error(f'  ✗ {error_msg}')
+                        raise BenchError(error_msg, RuntimeError(error_msg))
+                    
+                    Print.info(f'  ✓ Key generated on remote node')
+                    
                     # Download the key file
-                    conn.get(remote_key_path, key_file)
+                    Print.info(f'Downloading key file {key_file}...')
+                    try:
+                        conn.get(remote_key_path, key_file)
+                        Print.info(f'  ✓ Key file downloaded: {key_file}')
+                    except Exception as e:
+                        error_msg = f'Failed to download key file {key_file} from remote node: {e}'
+                        Print.error(f'  ✗ {error_msg}')
+                        raise BenchError(error_msg, e)
                 
-                # Load all keys
+                # Load all keys and verify we have the correct number
+                Print.info(f'Loading {len(key_files)} key files...')
                 for key_file in key_files:
+                    key_path = Path(key_file)
+                    if not key_path.exists():
+                        error_msg = f'Key file {key_file} was not downloaded successfully'
+                        Print.error(f'  ✗ {error_msg}')
+                        raise BenchError(error_msg, FileNotFoundError(error_msg))
+                    Print.info(f'  ✓ Loading key from {key_file}')
                     keys += [Key.from_file(key_file)]
+                
+                Print.info(f'Successfully generated and loaded {len(keys)} keys')
+                
+                if len(keys) != len(hosts):
+                    error_msg = (
+                        f'Generated {len(keys)} keys but need {len(hosts)} keys for {len(hosts)} hosts. '
+                        f'Key files: {key_files}'
+                    )
+                    raise BenchError(error_msg, ValueError(error_msg))
+                
+                conn.close()
                     
             except Exception as e:
-                raise BenchError('Failed to generate keys on remote nodes. Please ensure the code is compiled on remote nodes.', e)
+                error_msg = f'Failed to generate keys on remote nodes. Please ensure the code is compiled on remote nodes. Error: {e}'
+                Print.error(error_msg)
+                Print.error(f'Keys generated so far: {len(keys)}/{len(key_files)}')
+                Print.error(f'Key files expected: {key_files}')
+                if hasattr(e, '__traceback__'):
+                    import traceback
+                    Print.error('Full traceback:')
+                    traceback.print_exc()
+                raise BenchError(error_msg, e)
+        
+        # Final check: ensure we have keys before proceeding
+        if len(keys) == 0:
+            error_msg = (
+                f'No keys were generated. Local compilation failed and remote generation also failed. '
+                f'Please ensure either: (1) node binary exists locally, or (2) remote nodes have compiled code.'
+            )
+            raise BenchError(error_msg, RuntimeError(error_msg))
         
         # Create addresses dict for Committee
         # Format: {name: [primary_host, worker1_host, worker2_host, ...]}
         addresses = OrderedDict()
+        
+        # Verify that we have the same number of keys and hosts
+        if len(keys) != len(hosts):
+            error_msg = (
+                f'Mismatch between number of keys ({len(keys)}) and hosts ({len(hosts)}). '
+                f'Expected {len(hosts)} keys for {len(hosts)} hosts.'
+            )
+            raise BenchError(error_msg, ValueError(error_msg))
+        
         for i, key in enumerate(keys):
             host = hosts[i]
             hostname = host['hostname']
@@ -788,6 +917,16 @@ class CloudLabBench:
                 worker_hosts = [hostname] * bench_parameters.workers
             
             addresses[key.name] = [hostname] + worker_hosts
+        
+        # Verify all address lists have the same length before creating Committee
+        lengths = [len(x) for x in addresses.values()]
+        if len(set(lengths)) != 1:
+            error_msg = (
+                f'Address lists have inconsistent lengths: {lengths}. '
+                f'All nodes must have the same number of workers. '
+                f'Addresses: {dict(addresses)}'
+            )
+            raise BenchError(error_msg, ValueError(error_msg))
         
         committee = Committee(addresses, self.settings.base_port)
         committee.print(PathMaker.committee_file())  # 改为 print() 而不是 save()
@@ -863,12 +1002,11 @@ class CloudLabBench:
         
         try:
             run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
-            anaconda_python = '/Users/michael/opt/anaconda3/bin/python3'
             
             if run_benchmark_script.exists():
                 Print.info('Running run_cloudlab_benchmark.py --no-run to process logs...')
                 result = subprocess.run(
-                    [anaconda_python, str(run_benchmark_script), '--no-run'],
+                    [sys.executable, str(run_benchmark_script), '--no-run'],
                     cwd=str(benchmark_dir),
                     capture_output=False,  # Show output in real-time
                     text=True
@@ -972,18 +1110,21 @@ SCRIPTEOF'''
             script_write_result = c.run(script_cmd, hide=True, warn=True)
             if not script_write_result.ok:
                 Print.error(f'  ✗ Failed to create script: {script_write_result.stderr}')
-                raise BenchError(f'Failed to create script for {name} on {hostname}')
+                error_msg = f'Failed to create script for {name} on {hostname}'
+                raise BenchError(error_msg, RuntimeError(error_msg))
             
             chmod_result = c.run(f'chmod +x {script_path}', hide=True, warn=True)
             if not chmod_result.ok:
                 Print.error(f'  ✗ Failed to make script executable: {chmod_result.stderr}')
-                raise BenchError(f'Failed to make script executable for {name} on {hostname}')
+                error_msg = f'Failed to make script executable for {name} on {hostname}'
+                raise BenchError(error_msg, RuntimeError(error_msg))
             
             # Verify script was created correctly
             verify_script = c.run(f'test -f {script_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
             if 'FAIL' in verify_script.stdout:
                 Print.error(f'  ✗ Script file {script_path} was not created')
-                raise BenchError(f'Script file not created for {name} on {hostname}')
+                error_msg = f'Script file not created for {name} on {hostname}'
+                raise BenchError(error_msg, FileNotFoundError(error_msg))
             
             # Use nohup to run the script in background
             # Use setsid to create a new session and detach from terminal
@@ -993,12 +1134,14 @@ SCRIPTEOF'''
             
             if not nohup_result.ok:
                 Print.error(f'  ✗ Failed to start {name}: {nohup_result.stderr}')
-                raise BenchError(f'Failed to start {name} on {hostname}')
+                error_msg = f'Failed to start {name} on {hostname}'
+                raise BenchError(error_msg, RuntimeError(error_msg))
             
             pid = nohup_result.stdout.strip()
             if not pid or not pid.isdigit():
                 Print.error(f'  ✗ Failed to get PID for {name}')
-                raise BenchError(f'Failed to start {name} on {hostname}')
+                error_msg = f'Failed to start {name} on {hostname}'
+                raise BenchError(error_msg, ValueError(error_msg))
             
             Print.info(f'  ✓ {name} started on {hostname} (PID: {pid})')
             

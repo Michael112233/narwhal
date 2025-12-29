@@ -8,16 +8,16 @@ BRANCH="experiment1"
 
 # CloudLab 所有节点（和 cloudlab_settings.json / remote_setup_config.json 保持一致）
 NODES=(
-  "er076.utah.cloudlab.us"
-  "er127.utah.cloudlab.us"
-  "er093.utah.cloudlab.us"
-  "er086.utah.cloudlab.us"
-  "er116.utah.cloudlab.us"
-  "er124.utah.cloudlab.us"
-  "er108.utah.cloudlab.us"
-  "er095.utah.cloudlab.us"
-  "er092.utah.cloudlab.us"
-  "er107.utah.cloudlab.us"
+  "10.10.1.1"
+  "10.10.1.2"
+  "10.10.1.3"
+  "10.10.1.4"
+  "10.10.1.5"
+  "10.10.1.6"
+  "10.10.1.7"
+  "10.10.1.8"
+  "10.10.1.9"
+  "10.10.1.10"
 )
 
 USER="wucy"
