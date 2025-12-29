@@ -221,9 +221,9 @@ def cloudlab_remote(ctx, debug=False):
         'nodes': [4],
         'workers': 1,
         'collocate': True,
-        'rate': [100_000],
+        'rate': [220000],
         'tx_size': 512,
-        'duration': 20,
+        'duration': 90,
         'runs': 1,
         # 'trigger_attack': [True], 
     }
@@ -266,3 +266,31 @@ def cloudlab_kill(ctx):
         CloudLabBench(ctx).kill()
     except BenchError as e:
         Print.error(e)
+
+
+@task
+def cloudlab_download_primary_logs(ctx, nodes='0,1,2,3'):
+    ''' Download primary logs from specified CloudLab nodes (default: 0,1,2,3) '''
+    import sys
+    import os
+    # Add benchmark directory to path
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    
+    from download_logs import download_primary_logs
+    
+    try:
+        # Parse node indices
+        node_indices = [int(x.strip()) for x in nodes.split(',')]
+        Print.info(f'Downloading primary logs from nodes: {node_indices}')
+        success = download_primary_logs('cloudlab_settings.json', node_indices)
+        if success:
+            Print.info('✓ Successfully downloaded primary logs')
+        else:
+            Print.error('✗ Failed to download some primary logs')
+        return success
+    except ValueError as e:
+        Print.error(f'Invalid node indices format: {nodes}. Use comma-separated numbers like "0,1,2,3"')
+        return False
+    except Exception as e:
+        Print.error(f'Failed to download primary logs: {e}')
+        return False

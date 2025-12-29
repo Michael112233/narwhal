@@ -46,9 +46,38 @@ class CloudLabBench:
         self.settings = self.manager.settings
         
         try:
-            ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
-                self.manager.settings.key_path
-            )
+            # Try to load key without password first
+            try:
+                ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
+                    self.manager.settings.key_path
+                )
+            except PasswordRequiredException:
+                # Key is password-protected, try to get password
+                import os
+                password = os.environ.get('SSH_KEY_PASSWORD')
+                
+                # Try to get password from cloudlab_settings.json if it exists
+                if not password:
+                    try:
+                        import json
+                        settings_file = Path(__file__).parent.parent / 'cloudlab_settings.json'
+                        if settings_file.exists():
+                            with open(settings_file, 'r') as f:
+                                settings_data = json.load(f)
+                                password = settings_data.get('ssh_key_password')
+                    except Exception:
+                        pass
+                
+                if password:
+                    ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
+                        self.manager.settings.key_path,
+                        password=password
+                    )
+                else:
+                    raise BenchError(
+                        'SSH key is password-protected. Please provide password via SSH_KEY_PASSWORD environment variable or ssh_key_password in cloudlab_settings.json',
+                        PasswordRequiredException('private key file is encrypted')
+                    )
             self.connect = ctx.connect_kwargs
         except (IOError, PasswordRequiredException, SSHException) as e:
             raise BenchError('Failed to load SSH key', e)

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Script to download logs from CloudLab remote nodes
-Downloads logs through node0 using internal network (inner_ip from cloudlab_settings.json)
+Downloads logs through node0
 """
 
 import sys
 import os
 import time
+import json
 from pathlib import Path
 from fabric import Connection
 from paramiko import RSAKey
@@ -24,8 +25,31 @@ from benchmark.utils import PathMaker, Print
 def get_connection_kwargs(key_path):
     """Get SSH connection kwargs"""
     try:
-        key = RSAKey.from_private_key_file(key_path)
-        return {'pkey': key}
+        # Try to load key without password first
+        try:
+            key = RSAKey.from_private_key_file(key_path)
+            return {'pkey': key}
+        except PasswordRequiredException:
+            # Key is password-protected, try to get password
+            password = os.environ.get('SSH_KEY_PASSWORD')
+            
+            # Try to get password from cloudlab_settings.json if it exists
+            if not password:
+                try:
+                    settings_file = Path(__file__).parent / 'cloudlab_settings.json'
+                    if settings_file.exists():
+                        with open(settings_file, 'r') as f:
+                            settings_data = json.load(f)
+                            password = settings_data.get('ssh_key_password')
+                except Exception:
+                    pass
+            
+            if password:
+                key = RSAKey.from_private_key_file(key_path, password=password)
+                return {'pkey': key}
+            else:
+                Print.error('SSH key is password-protected. Please provide password via SSH_KEY_PASSWORD environment variable or ssh_key_password in cloudlab_settings.json')
+                return {}
     except (FileNotFoundError, PasswordRequiredException, SSHException) as e:
         Print.error(f'Failed to load SSH key: {e}')
         return {}
@@ -149,19 +173,18 @@ def safe_get_file(conn, remote_path, local_path, timeout=30):
 
 def collect_logs_via_node0(conn, repo_name, host_info, max_workers=1):
     """
-    Collect logs from all nodes via node0 using internal network
-    Uses inner_ip from cloudlab_settings.json
+    Collect logs from all nodes via node0
     
     Args:
         conn: Connection to node0
         repo_name: Repository name on remote nodes
-        host_info: List of host info dicts (with 'inner_ip' field)
+        host_info: List of host info dicts
         max_workers: Maximum number of workers per node
     
     Returns:
         tuple: (dict mapping node index to list of collected log paths on node0, temp_dir)
     """
-    Print.info('  Collecting logs from all nodes via internal network...')
+    Print.info('  Collecting logs from all nodes...')
     sys.stdout.flush()
     
     # Create temporary directory on node0 to store all logs
@@ -173,14 +196,8 @@ def collect_logs_via_node0(conn, repo_name, host_info, max_workers=1):
     for i, host in enumerate(host_info):
         hostname = host['hostname']
         username = host.get('username', 'root')
-        inner_ip = host.get('inner_ip')  # Get inner_ip from config
         
-        if not inner_ip:
-            Print.warn(f'    ⚠ Node{i} ({hostname}) has no inner_ip configured, skipping...')
-            sys.stdout.flush()
-            continue
-        
-        Print.info(f'    [{i+1}/{len(host_info)}] Collecting logs from node{i} ({hostname}, inner_ip: {inner_ip})...')
+        Print.info(f'    [{i+1}/{len(host_info)}] Collecting logs from node{i} ({hostname})...')
         sys.stdout.flush()
         
         node_logs = []
@@ -196,16 +213,16 @@ def collect_logs_via_node0(conn, repo_name, host_info, max_workers=1):
         Print.info(f'      Collecting primary-{i}.log...')
         sys.stdout.flush()
         
-        # Use scp or rsync to copy from other node via internal network
+        # Use scp or rsync to copy from other node
         # If it's node0 itself, just copy directly
         if i == 0:
             result = conn.run(f'cp {remote_log} {local_log_on_node0} 2>/dev/null || echo "not_found"', 
                             hide=True, warn=True)
         else:
-            # Copy from other node via internal network using inner_ip
+            # Copy from other node using hostname
             result = conn.run(
                 f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
-                f'{username}@{inner_ip}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                f'{username}@{hostname}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
                 hide=True, warn=True
             )
         
@@ -227,7 +244,7 @@ def collect_logs_via_node0(conn, repo_name, host_info, max_workers=1):
             else:
                 result = conn.run(
                     f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
-                    f'{username}@{inner_ip}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                    f'{username}@{hostname}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
                     hide=True, warn=True
                 )
             
@@ -245,12 +262,88 @@ def collect_logs_via_node0(conn, repo_name, host_info, max_workers=1):
             else:
                 result = conn.run(
                     f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
-                    f'{username}@{inner_ip}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                    f'{username}@{hostname}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
                     hide=True, warn=True
                 )
             
             if 'not_found' not in result.stdout and conn.run(f'test -f {local_log_on_node0}', hide=True, warn=True).ok:
                 node_logs.append(local_log_on_node0)
+        
+        collected_logs[i] = node_logs
+    
+    return collected_logs, temp_dir
+
+def collect_primary_logs_via_node0(conn, repo_name, host_info, node_indices=None):
+    """
+    Collect primary logs from specified nodes via node0
+    
+    Args:
+        conn: Connection to node0
+        repo_name: Repository name on remote nodes
+        host_info: List of host info dicts
+        node_indices: List of node indices to download from (e.g., [0,1,2,3]). If None, downloads from all nodes.
+    
+    Returns:
+        tuple: (dict mapping node index to list of collected log paths on node0, temp_dir)
+    """
+    Print.info('  Collecting primary logs from specified nodes...')
+    sys.stdout.flush()
+    
+    # Create temporary directory on node0 to store all logs
+    temp_dir = f'/tmp/narwhal_primary_logs_{int(time.time())}'
+    conn.run(f'mkdir -p {temp_dir}', hide=True, warn=True)
+    
+    collected_logs = {}
+    
+    # If node_indices is None, collect from all nodes
+    if node_indices is None:
+        node_indices = list(range(len(host_info)))
+    
+    for i in node_indices:
+        if i >= len(host_info):
+            Print.warn(f'    ⚠ Node{i} index out of range, skipping...')
+            sys.stdout.flush()
+            continue
+            
+        host = host_info[i]
+        hostname = host['hostname']
+        username = host.get('username', 'root')
+        
+        Print.info(f'    [{node_indices.index(i)+1}/{len(node_indices)}] Collecting primary log from node{i} ({hostname})...')
+        sys.stdout.flush()
+        
+        node_logs = []
+        
+        # Create node directory on node0
+        node_dir = f'{temp_dir}/node{i}'
+        conn.run(f'mkdir -p {node_dir}', hide=True, warn=True)
+        
+        # Collect primary log
+        remote_log = f'{repo_name}/{PathMaker.primary_log_file(i)}'
+        local_log_on_node0 = f'{node_dir}/primary-{i}.log'
+        
+        Print.info(f'      Collecting primary-{i}.log...')
+        sys.stdout.flush()
+        
+        # Use scp or rsync to copy from other node
+        # If it's node0 itself, just copy directly
+        if i == 0:
+            result = conn.run(f'cp {remote_log} {local_log_on_node0} 2>/dev/null || echo "not_found"', 
+                            hide=True, warn=True)
+        else:
+            # Copy from other node using hostname
+            result = conn.run(
+                f'scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 '
+                f'{username}@{hostname}:{remote_log} {local_log_on_node0} 2>&1 || echo "not_found"',
+                hide=True, warn=True
+            )
+        
+        if 'not_found' not in result.stdout and conn.run(f'test -f {local_log_on_node0}', hide=True, warn=True).ok:
+            node_logs.append(local_log_on_node0)
+            Print.info(f'      ✓ Collected primary-{i}.log')
+        else:
+            Print.warn(f'      ⚠ primary-{i}.log not found on node{i}')
+        sys.stdout.flush()
         
         collected_logs[i] = node_logs
     
@@ -372,6 +465,127 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
             except Exception:
                 pass
 
+def download_primary_logs(settings_file='cloudlab_settings.json', node_indices=None):
+    """Download primary logs from specified CloudLab nodes via node0"""
+    
+    # Load settings
+    try:
+        settings = CloudLabSettings.load(settings_file)
+    except Exception as e:
+        Print.error(f'Failed to load settings: {e}')
+        return False
+    
+    # Create instance manager
+    manager = CloudLabInstanceManager(settings)
+    host_info = manager.get_host_info()
+    repo_name = settings.repo_name
+    
+    if not host_info:
+        Print.error('No hosts configured')
+        return False
+    
+    # If node_indices is None, download from all nodes
+    if node_indices is None:
+        node_indices = list(range(len(host_info)))
+    
+    # Get node0 (first node)
+    node0 = host_info[0]
+    node0_hostname = node0['hostname']
+    node0_username = node0.get('username', 'root')
+    node0_port = node0.get('port', 22)
+    
+    Print.info(f'Connecting to node0: {node0_username}@{node0_hostname}:{node0_port}')
+    Print.info(f'Repository name: {repo_name}')
+    Print.info(f'Downloading primary logs from nodes: {node_indices}')
+    Print.info('=' * 60)
+    sys.stdout.flush()
+    
+    conn_kwargs = get_connection_kwargs(settings.key_path)
+    if not conn_kwargs:
+        Print.error('Failed to load SSH key. Cannot proceed.')
+        return False
+    
+    # Create local logs directory
+    logs_dir = Path(PathMaker.logs_path())
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    
+    conn = None
+    temp_dir = None
+    try:
+        # Connect to node0
+        Print.info('Connecting to node0...')
+        sys.stdout.flush()
+        conn = Connection(node0_hostname, user=node0_username, port=node0_port, 
+                         connect_kwargs=conn_kwargs, connect_timeout=30)
+        conn.open()
+        Print.info('✓ Connected to node0')
+        sys.stdout.flush()
+        
+        # Collect primary logs from specified nodes via node0
+        collected_logs, temp_dir = collect_primary_logs_via_node0(conn, repo_name, host_info, node_indices)
+        
+        # Download all collected logs from node0
+        Print.info('=' * 60)
+        Print.info('Downloading collected primary logs from node0...')
+        Print.info('=' * 60)
+        sys.stdout.flush()
+        
+        success_count = 0
+        fail_count = 0
+        
+        for node_idx, log_paths in collected_logs.items():
+            for log_path in log_paths:
+                # Determine local path based on log filename
+                log_filename = os.path.basename(log_path)
+                local_log = logs_dir / log_filename
+                local_log.parent.mkdir(parents=True, exist_ok=True)
+                
+                Print.info(f'  Downloading {log_filename}...')
+                sys.stdout.flush()
+                
+                try:
+                    safe_get_file(conn, log_path, local_log, timeout=30)
+                    Print.info(f'  ✓ Downloaded {log_filename}')
+                    success_count += 1
+                    sys.stdout.flush()
+                except Exception as e:
+                    Print.warn(f'  ⚠ Failed to download {log_filename}: {str(e)[:100]}')
+                    fail_count += 1
+                    sys.stdout.flush()
+        
+        # Clean up temporary directory on node0
+        if temp_dir:
+            Print.info(f'Cleaning up temporary directory on node0...')
+            sys.stdout.flush()
+            conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
+        
+        Print.info('=' * 60)
+        Print.info(f'Download complete: {success_count} succeeded, {fail_count} failed')
+        Print.info(f'Primary logs saved to: {logs_dir.absolute()}')
+        sys.stdout.flush()
+        
+        return fail_count == 0
+        
+    except KeyboardInterrupt:
+        Print.warn('\n✗ Interrupted by user')
+        return False
+    except Exception as e:
+        error_msg = str(e)
+        if len(error_msg) > 200:
+            error_msg = error_msg[:200] + '...'
+        Print.error(f'✗ Failed: {error_msg}')
+        return False
+    finally:
+        # Clean up connection
+        if conn:
+            try:
+                # Clean up temp directory if still exists
+                if temp_dir:
+                    conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
+                conn.close()
+            except Exception:
+                pass
+
 if __name__ == '__main__':
     import argparse
     
@@ -380,8 +594,22 @@ if __name__ == '__main__':
                        help='Path to CloudLab settings file')
     parser.add_argument('--max-workers', type=int, default=1,
                        help='Maximum number of workers per node (default: 1)')
+    parser.add_argument('--primary-only', action='store_true',
+                       help='Download only primary logs')
+    parser.add_argument('--nodes', type=str, default=None,
+                       help='Comma-separated list of node indices to download from (e.g., "0,1,2,3")')
     
     args = parser.parse_args()
     
-    success = download_logs(args.settings, args.max_workers)
+    if args.primary_only:
+        node_indices = None
+        if args.nodes:
+            try:
+                node_indices = [int(x.strip()) for x in args.nodes.split(',')]
+            except ValueError:
+                Print.error(f'Invalid node indices: {args.nodes}')
+                sys.exit(1)
+        success = download_primary_logs(args.settings, node_indices)
+    else:
+        success = download_logs(args.settings, args.max_workers)
     sys.exit(0 if success else 1)

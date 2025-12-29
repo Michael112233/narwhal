@@ -41,8 +41,7 @@ import sys
 import argparse
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from fabric import Connection, ThreadingGroup as Group
-from fabric.exceptions import GroupException
+from fabric import Connection
 from paramiko import RSAKey
 from paramiko.ssh_exception import PasswordRequiredException, SSHException
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -74,8 +73,27 @@ class RemoteServerManager:
             if not self.ssh_key_path.exists():
                 raise RemoteSetupError(f"SSH key not found: {self.ssh_key_path}")
             
+            # Try to load key without password first
+            try:
+                pkey = RSAKey.from_private_key_file(str(self.ssh_key_path))
+            except PasswordRequiredException:
+                # Key is password-protected, try to get password
+                import os
+                password = os.environ.get('SSH_KEY_PASSWORD')
+                
+                # Try to get password from config if not in environment
+                if not password:
+                    password = config.get('ssh_key_password')
+                
+                if password:
+                    pkey = RSAKey.from_private_key_file(str(self.ssh_key_path), password=password)
+                else:
+                    raise RemoteSetupError(
+                        'SSH key is password-protected. Please provide password via SSH_KEY_PASSWORD environment variable or ssh_key_password in config file'
+                    )
+            
             self.connect_kwargs = {
-                'pkey': RSAKey.from_private_key_file(str(self.ssh_key_path))
+                'pkey': pkey
             }
         except (IOError, PasswordRequiredException, SSHException) as e:
             raise RemoteSetupError(f'Failed to load SSH key: {e}')
@@ -138,6 +156,7 @@ class RemoteServerManager:
                        hide_output: bool = False) -> Dict[str, Any]:
         """
         Execute a single command on a server
+        Creates a separate socket connection for each command
         
         Args:
             server: Server configuration dictionary
@@ -152,7 +171,9 @@ class RemoteServerManager:
         port = server.get('port', 22)
         connect_timeout = server.get('connect_timeout', 30)
         
+        conn = None
         try:
+            # Create a new connection (separate socket) for each command
             conn = Connection(
                 hostname,
                 user=username,
@@ -178,11 +199,19 @@ class RemoteServerManager:
                 'command': command,
                 'error': str(e)
             }
+        finally:
+            # Explicitly close the connection to free the socket
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
     def execute_commands_parallel(self, commands: List[str], 
                                   hide_output: bool = False) -> List[Dict[str, Any]]:
         """
         Execute commands on all servers in parallel
+        Each server and command uses a separate socket connection
         
         Args:
             commands: List of commands to execute
@@ -193,78 +222,65 @@ class RemoteServerManager:
         """
         results = []
         
-        # Group servers by connection parameters for efficient execution
-        servers_by_config = {}
+        # Create tasks: (server, command) pairs
+        tasks = []
         for server in self.servers:
+            for cmd in commands:
+                tasks.append((server, cmd))
+        
+        print(f"\n  Executing {len(tasks)} tasks in parallel (each with separate connection)...")
+        
+        # Execute all tasks in parallel using ThreadPoolExecutor
+        # Each task creates its own Connection (socket)
+        def execute_single_task(task):
+            server, cmd = task
+            hostname = server['hostname']
             username = server.get('username', 'ubuntu')
             port = server.get('port', 22)
-            key = (username, port)
-            if key not in servers_by_config:
-                servers_by_config[key] = []
-            servers_by_config[key].append(server)
-        
-        # Execute commands on each group
-        for (username, port), server_group in servers_by_config.items():
-            hostnames = [s['hostname'] for s in server_group]
+            connect_timeout = server.get('connect_timeout', 30)
             
-            # Test connections first
-            valid_hostnames = []
-            for server in server_group:
-                if self.test_connection(server):
-                    valid_hostnames.append(server['hostname'])
-            
-            if not valid_hostnames:
-                print(f"  ⚠ No valid connections for {username}@{port}, skipping...")
-                continue
-            
-            # Execute each command
-            for cmd in commands:
-                print(f"\n  Executing: {cmd}")
-                print(f"  On {len(valid_hostnames)} server(s): {', '.join(valid_hostnames)}")
+            try:
+                # Create a new connection for each task (separate socket)
+                conn = Connection(
+                    hostname,
+                    user=username,
+                    port=port,
+                    connect_kwargs=self.connect_kwargs,
+                    connect_timeout=connect_timeout
+                )
                 
-                try:
-                    g = Group(
-                        *valid_hostnames,
-                        user=username,
-                        port=port,
-                        connect_kwargs=self.connect_kwargs,
-                        connect_timeout=30
-                    )
-                    
-                    result = g.run(cmd, hide=hide_output, warn=True)
-                    
-                    # Process results
-                    if isinstance(result, dict):
-                        for hostname, output in result.items():
-                            results.append({
-                                'success': output.ok,
-                                'hostname': hostname,
-                                'command': cmd,
-                                'stdout': output.stdout,
-                                'stderr': output.stderr,
-                                'return_code': output.return_code
-                            })
-                    else:
-                        results.append({
-                            'success': result.ok,
-                            'hostname': ','.join(valid_hostnames),
-                            'command': cmd,
-                            'stdout': result.stdout,
-                            'stderr': result.stderr,
-                            'return_code': result.return_code
-                        })
-                    
-                    print(f"  ✓ Command completed")
-                    
-                except GroupException as e:
-                    print(f"  ✗ Command failed: {e}")
-                    for hostname in valid_hostnames:
-                        results.append({
-                            'success': False,
-                            'hostname': hostname,
-                            'command': cmd,
-                            'error': str(e)
-                        })
+                result = conn.run(cmd, hide=hide_output, warn=True)
+                conn.close()  # Close the connection after use
+                
+                return {
+                    'success': result.ok,
+                    'hostname': hostname,
+                    'command': cmd,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'return_code': result.return_code
+                }
+            except Exception as e:
+                return {
+                    'success': False,
+                    'hostname': hostname,
+                    'command': cmd,
+                    'error': str(e)
+                }
+        
+        # Execute all tasks in parallel
+        with ThreadPoolExecutor(max_workers=min(len(tasks), 20)) as executor:
+            future_to_task = {executor.submit(execute_single_task, task): task for task in tasks}
+            
+            completed = 0
+            for future in as_completed(future_to_task):
+                completed += 1
+                result = future.result()
+                results.append(result)
+                
+                if not hide_output:
+                    status = "✓" if result['success'] else "✗"
+                    print(f"  [{completed}/{len(tasks)}] {status} {result['hostname']}: {result['command'][:50]}...")
         
         return results
     
