@@ -198,7 +198,7 @@ def main():
             'tx_size': 512,
             'duration': 90,
             'runs': 1,
-            # 'trigger_attack': [True],  # Uncomment to enable attack
+            'trigger_attack': [False],  # Uncomment to enable attack
         }
         
         # Node parameters

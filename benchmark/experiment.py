@@ -187,8 +187,8 @@ def main():
     target_nodes = ['10.10.1.1', '10.10.1.2', '10.10.1.3', '10.10.1.4']
     
     # Rate values to test
-    rate_values = [320000]
-    runs_per_rate = 3
+    rate_values = [220000, 240000, 260000, 280000, 300000]
+    runs_per_rate = 5
     
     Print.heading('Experiment: Running cloudlab_remote on nodes 10.10.1.1-4')
     Print.info(f'Target nodes: {", ".join(target_nodes)}')
@@ -229,7 +229,7 @@ def main():
             'tx_size': 512,
             'duration': 90,
             'runs': runs_per_rate,  # Each rate will run 3 times
-            # 'trigger_attack': [True],  # Uncomment to enable attack
+            'trigger_attack': [False],  # Uncomment to enable attack
         }
         
         # Node parameters
