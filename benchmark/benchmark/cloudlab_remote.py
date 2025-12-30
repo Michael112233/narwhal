@@ -793,20 +793,38 @@ class CloudLabBench:
                                  connect_kwargs=conn_kwargs, connect_timeout=30)
                 
                 # Generate keys on remote node (code should already be compiled from _update)
+                # First, get the actual home directory from remote
+                home_result = conn.run('echo $HOME', hide=True, warn=True)
+                remote_home = home_result.stdout.strip() if home_result.ok else '~'
+                
                 for i, key_file in enumerate(key_files):
-                    # Use absolute path for key file on remote
-                    remote_key_path = f'{repo_name}/{key_file}'
+                    # Use absolute path for key file on remote (expand $HOME)
+                    remote_key_path = f'{remote_home}/{repo_name}/{key_file}'
                     # Generate key using the compiled node binary
                     # node binary is in node/ directory, benchmark_client is in repo root
+                    # Use absolute path and ensure we're in the correct directory
                     # Try node/node first, then fallback to target/release/node
-                    cmd = f'cd {repo_name} && ./node/node generate_keys --filename {remote_key_path}'
+                    # Remove any stale .cargo-lock files (may require sudo if owned by root)
+                    # The .cargo-lock error is usually harmless (just a warning from Cargo)
+                    # Try to remove with sudo first, then without sudo
+                    cmd = f'cd {remote_home}/{repo_name} && (sudo rm -f target/release/.cargo-lock 2>/dev/null || rm -f target/release/.cargo-lock 2>/dev/null || true) && CARGO_HOME={remote_home}/.cargo ./node/node generate_keys --filename {remote_key_path} 2>&1 | grep -v "failed to open.*cargo-lock" || true'
                     result = conn.run(cmd, hide=True, warn=True)
-                    if not result.ok:
+                    # Check if key file was actually created (more reliable than exit code)
+                    key_check = conn.run(f'test -f {remote_key_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
+                    if 'FAIL' in key_check.stdout or not result.ok:
                         # Try with target/release/node if ./node/node doesn't exist
-                        cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_path}'
-                        result = conn.run(cmd, hide=True)
+                        cmd = f'cd {remote_home}/{repo_name} && (sudo rm -f target/release/.cargo-lock 2>/dev/null || rm -f target/release/.cargo-lock 2>/dev/null || true) && CARGO_HOME={remote_home}/.cargo ./target/release/node generate_keys --filename {remote_key_path} 2>&1 | grep -v "failed to open.*cargo-lock" || true'
+                        result = conn.run(cmd, hide=True, warn=True)
+                        # Verify key file was created
+                        key_check = conn.run(f'test -f {remote_key_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
+                        if 'FAIL' in key_check.stdout:
+                            raise BenchError(f'Failed to generate key file {remote_key_path} on {hostname}')
                     
-                    # Download the key file
+                    # Download the key file - ensure local directory exists
+                    import os
+                    local_key_dir = os.path.dirname(key_file) if os.path.dirname(key_file) else '.'
+                    if local_key_dir and not os.path.exists(local_key_dir):
+                        os.makedirs(local_key_dir, exist_ok=True)
                     conn.get(remote_key_path, key_file)
                 
                 # Load all keys
