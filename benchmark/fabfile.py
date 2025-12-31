@@ -31,7 +31,7 @@ def local(ctx, debug=True):
         'workers': 1,
         'rate': 220000,
         'tx_size': 512,
-        'duration': 60,
+        'duration': 120,
         'trigger_attack': True
     }
     node_params = {
@@ -221,11 +221,11 @@ def cloudlab_remote(ctx, debug=False):
         'nodes': [4],
         'workers': 1,
         'collocate': True,
-        'rate': [280000],
+        'rate': [120000],
         'tx_size': 512,
-        'duration': 90,
+        'duration': 120,
         'runs': 1,
-        'trigger_attack': [True], 
+        'trigger_attack': [False], 
     }
     node_params = {
         'header_size': 1_000,  # bytes

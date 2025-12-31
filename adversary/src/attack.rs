@@ -5,7 +5,7 @@ use tokio::time::sleep;
 pub static TRIGGER_NETWORK_INTERRUPT: AtomicBool = AtomicBool::new(false);
 pub const NETWORK_PARTITION: bool = false;
 
-pub const ATTACK_START_TIME_SEC: u64 = 10; 
+pub const ATTACK_START_TIME_SEC: u64 = 50; 
 pub const ATTACK_DURATION_SEC: u64 = 30;    
 
 pub const GROUP: [usize; 10] = [0, 1, 1, 0, 1, 1, 0, 0, 0, 0];
