@@ -248,23 +248,23 @@ impl Committee {
     }
 
     pub fn address_to_index(&self, address: &SocketAddr) -> usize {
-        let primary_num = self.authorities.len();
-        let total_workers: usize = self.authorities.values().map(|x| x.workers.len()).sum();
-        let worker_num = total_workers / primary_num;
-        let port = address.port();
-        (port - BASE_PORT) as usize / (worker_num * 3 + 2)
-        // println!("address: {:?}", address);
-        // match address.ip() {
-        //     std::net::IpAddr::V4(ipv4) => {
-        //         let octets = ipv4.octets();
-        //         if octets[0] == 10 && octets[1] == 10 && octets[2] == 1 {
-        //             octets[3] as usize
-        //         } else {
-        //             0
-        //         }
-        //     },
-        //     _ => 0
-        // }
+        // let primary_num = self.authorities.len();
+        // let total_workers: usize = self.authorities.values().map(|x| x.workers.len()).sum();
+        // let worker_num = total_workers / primary_num;
+        // let port = address.port();
+        // (port - BASE_PORT) as usize / (worker_num * 3 + 2)
+        println!("address: {:?}", address);
+        match address.ip() {
+            std::net::IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
+                if octets[0] == 10 && octets[1] == 10 && octets[2] == 1 {
+                    octets[3] as usize
+                } else {
+                    0
+                }
+            },
+            _ => 0
+        }
     }
 }
 
