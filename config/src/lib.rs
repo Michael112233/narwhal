@@ -258,7 +258,7 @@ impl Committee {
             std::net::IpAddr::V4(ipv4) => {
                 let octets = ipv4.octets();
                 if octets[0] == 10 && octets[1] == 10 && octets[2] == 1 {
-                    octets[3] as usize
+                    (octets[3]-1) as usize
                 } else {
                     0
                 }
