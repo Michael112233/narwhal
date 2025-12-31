@@ -1307,8 +1307,10 @@ SCRIPTEOF'''
         # 5. Wait for all transactions to be processed (progress output)
         duration = bench_parameters.duration
         Print.info(f'Running benchmark ({duration} sec)...')
+        # Calculate sleep interval to ensure exact duration
+        sleep_interval = duration / 20.0
         for i in range(20):
-            sleep(ceil(duration / 20))
+            sleep(sleep_interval)
             if (i + 1) % 5 == 0:
                 Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
 
