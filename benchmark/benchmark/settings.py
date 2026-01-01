@@ -8,7 +8,7 @@ class SettingsError(Exception):
 
 class Settings:
     def __init__(self, key_name, key_path, base_port, repo_name, repo_url,
-                 branch, instance_type, aws_regions):
+                 branch, instance_type, aws_regions, custom_hosts=None):
         inputs_str = [
             key_name, key_path, repo_name, repo_url, branch, instance_type
         ]
@@ -34,12 +34,19 @@ class Settings:
 
         self.instance_type = instance_type
         self.aws_regions = regions
+        self.custom_hosts = custom_hosts  # List of IP addresses or hostnames
 
     @classmethod
     def load(cls, filename):
         try:
             with open(filename, 'r') as f:
                 data = load(f)
+
+            custom_hosts = None
+            if 'custom_hosts' in data:
+                custom_hosts = data['custom_hosts']
+                if not isinstance(custom_hosts, list):
+                    raise SettingsError('custom_hosts must be a list')
 
             return cls(
                 data['key']['name'],
@@ -50,6 +57,7 @@ class Settings:
                 data['repo']['branch'],
                 data['instances']['type'],
                 data['instances']['regions'],
+                custom_hosts=custom_hosts,
             )
         except (OSError, JSONDecodeError) as e:
             raise SettingsError(str(e))

@@ -16,6 +16,56 @@ class AWSError(Exception):
         super().__init__(self.message)
 
 
+class CustomHostManager:
+    ''' Manager for custom IP addresses (non-AWS hosts) '''
+    def __init__(self, settings):
+        assert isinstance(settings, Settings)
+        self.settings = settings
+        self.custom_hosts = settings.custom_hosts or []
+
+    def hosts(self, flat=False):
+        if flat:
+            return self.custom_hosts.copy()
+        else:
+            # Return as a single "region" for compatibility
+            return {'custom': self.custom_hosts.copy()}
+
+    def create_instances(self, instances):
+        ''' Stub: Custom hosts are already created '''
+        Print.info(f'Using {len(self.custom_hosts)} custom hosts (no creation needed)')
+
+    def terminate_instances(self):
+        ''' Stub: Custom hosts cannot be terminated via this tool '''
+        Print.info('Custom hosts cannot be terminated via this tool')
+
+    def start_instances(self, max):
+        ''' Stub: Custom hosts are assumed to be always running '''
+        Print.info('Custom hosts are assumed to be always running')
+
+    def stop_instances(self):
+        ''' Stub: Custom hosts cannot be stopped via this tool '''
+        Print.info('Custom hosts cannot be stopped via this tool')
+
+    def print_info(self):
+        hosts = self.hosts()
+        key = self.settings.key_path
+        text = ''
+        for region, ips in hosts.items():
+            text += f'\n Region: {region.upper()}\n'
+            for i, ip in enumerate(ips):
+                new_line = '\n' if (i+1) % 6 == 0 else ''
+                text += f'{new_line} {i}\tssh -i {key} ubuntu@{ip}\n'
+        print(
+            '\n'
+            '----------------------------------------------------------------\n'
+            ' INFO:\n'
+            '----------------------------------------------------------------\n'
+            f' Available machines: {sum(len(x) for x in hosts.values())}\n'
+            f'{text}'
+            '----------------------------------------------------------------\n'
+        )
+
+
 class InstanceManager:
     INSTANCE_NAME = 'dag-node'
     SECURITY_GROUP_NAME = 'dag'
@@ -30,7 +80,11 @@ class InstanceManager:
     @classmethod
     def make(cls, settings_file='settings.json'):
         try:
-            return cls(Settings.load(settings_file))
+            settings = Settings.load(settings_file)
+            # If custom_hosts is specified, use CustomHostManager instead
+            if settings.custom_hosts:
+                return CustomHostManager(settings)
+            return cls(settings)
         except SettingsError as e:
             raise BenchError('Failed to load settings', e)
 
