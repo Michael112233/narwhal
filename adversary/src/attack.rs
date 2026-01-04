@@ -6,7 +6,7 @@ pub static TRIGGER_NETWORK_INTERRUPT: AtomicBool = AtomicBool::new(false);
 pub const NETWORK_PARTITION: bool = true;
 
 pub const ATTACK_START_TIME_SEC: u64 = 30; 
-pub const ATTACK_DURATION_SEC: u64 = 40;    
+pub const ATTACK_DURATION_SEC: u64 = 60;    
 
 pub const GROUP: [usize; 10] = [0, 1, 1, 0, 1, 1, 0, 0, 0, 0];
 pub const NETWORK_DELAY: u64 = 8000;
