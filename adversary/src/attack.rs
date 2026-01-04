@@ -1,12 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::time::sleep;
+use log::info;
 
 pub static TRIGGER_NETWORK_INTERRUPT: AtomicBool = AtomicBool::new(false);
 pub const NETWORK_PARTITION: bool = true;
 
-pub const ATTACK_START_TIME_SEC: u64 = 0; 
-pub const ATTACK_DURATION_SEC: u64 = 30;    
+pub const ATTACK_START_TIME_SEC: u64 = 10; 
+pub const ATTACK_DURATION_SEC: u64 = 20;    
 
 pub const GROUP: [usize; 10] = [0, 1, 1, 0, 1, 1, 0, 0, 0, 0];
 pub const NETWORK_DELAY: u64 = 6000;
@@ -18,12 +19,12 @@ pub fn start_attack_scheduler() {
         sleep(Duration::from_secs(ATTACK_START_TIME_SEC)).await;
         // start network partition attack
         TRIGGER_NETWORK_INTERRUPT.store(true, Ordering::Relaxed);
-        println!("[Attack] Network attack starts at {}s", start_time.elapsed().as_secs());
+        info!("[Attack] Network attack starts at {}s", start_time.elapsed().as_secs());
         sleep(Duration::from_secs(ATTACK_DURATION_SEC)).await;
         // stop attack
         TRIGGER_NETWORK_INTERRUPT.store(false, Ordering::Relaxed);
         let end_time = Instant::now();
-        println!("[Attack] Attack ends at {}s", end_time.elapsed().as_secs());
+        info!("[Attack] Attack ends at {}s", end_time.elapsed().as_secs());
     });
 }
 

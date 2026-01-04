@@ -7,4 +7,5 @@ authors = ["Libra <oncall+libra@xmail.facebook.com>"]
 
 [dependencies]
 tokio = { version = "1.5.0", features = ["sync", "rt", "macros", "time"] }
+log = "0.4.14"
 
