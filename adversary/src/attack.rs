@@ -5,11 +5,11 @@ use tokio::time::sleep;
 pub static TRIGGER_NETWORK_INTERRUPT: AtomicBool = AtomicBool::new(false);
 pub const NETWORK_PARTITION: bool = true;
 
-pub const ATTACK_START_TIME_SEC: u64 = 20; 
-pub const ATTACK_DURATION_SEC: u64 = 5;    
+pub const ATTACK_START_TIME_SEC: u64 = 10; 
+pub const ATTACK_DURATION_SEC: u64 = 20;    
 
 pub const GROUP: [usize; 10] = [0, 1, 1, 0, 1, 1, 0, 0, 0, 0];
-pub const NETWORK_DELAY: u64 = 8000;
+pub const NETWORK_DELAY: u64 = 6000;
 
 pub fn start_attack_scheduler() {
     let start_time = Instant::now();
