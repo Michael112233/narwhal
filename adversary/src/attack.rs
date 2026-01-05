@@ -4,7 +4,7 @@ use tokio::time::sleep;
 use log::info;
 
 pub static TRIGGER_NETWORK_INTERRUPT: AtomicBool = AtomicBool::new(false);
-pub const NETWORK_PARTITION: bool = false;
+pub const NETWORK_PARTITION: bool = true;
 
 pub const ATTACK_START_TIME_SEC: u64 = 50; 
 pub const ATTACK_DURATION_SEC: u64 = 30;    
