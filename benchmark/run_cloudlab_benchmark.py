@@ -125,13 +125,111 @@ def process_logs(faults=0, save_to_file=True):
         Print.warn(f'Error processing logs: {e}')
         return False
 
-def generate_round_end_time_pivot(num_nodes=10, experiment_group=None, logs_dir=None):
+def extract_rate_from_logs(logs_dir):
+    """Extract transaction rate from client log files.
+    
+    Args:
+        logs_dir: Directory containing log files
+    
+    Returns:
+        int or None: Transaction rate in tx/s, or None if not found
+    """
+    import re
+    import glob
+    from os.path import join
+    
+    # Try to find rate from any client log file
+    client_logs = sorted(glob.glob(join(logs_dir, 'client-*.log')))
+    for log_file in client_logs:
+        try:
+            with open(log_file, 'r') as f:
+                content = f.read()
+                match = re.search(r'Transactions rate: (\d+)', content)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            continue
+    return None
+
+def extract_imbalanced_rate_from_logs(logs_dir):
+    """Extract imbalanced rates from client log files.
+    
+    Args:
+        logs_dir: Directory containing log files
+    
+    Returns:
+        list or None: List of imbalanced rates, or None if not found
+    """
+    import re
+    import glob
+    from os.path import join
+    
+    # Try to find rates from all client log files
+    client_logs = sorted(glob.glob(join(logs_dir, 'client-*.log')))
+    imbalanced_rates = []
+    
+    for log_file in client_logs:
+        try:
+            with open(log_file, 'r') as f:
+                content = f.read()
+                match = re.search(r'Transactions rate: (\d+)', content)
+                if match:
+                    imbalanced_rates.append(int(match.group(1)))
+        except Exception:
+            continue
+    
+    return imbalanced_rates if imbalanced_rates else None
+
+def extract_duration_from_logs(logs_dir):
+    """Extract duration from log summary files.
+    
+    Args:
+        logs_dir: Directory containing log files
+    
+    Returns:
+        int or None: Duration in seconds, or None if not found
+    """
+    import re
+    import glob
+    from os.path import join
+    
+    # Try to find duration from result files or log summaries
+    result_files = sorted(glob.glob(join(logs_dir, '../results/bench-*.txt')))
+    for result_file in result_files:
+        try:
+            with open(result_file, 'r') as f:
+                content = f.read()
+                match = re.search(r'Execution time: (\d+)\s+s', content)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            continue
+    
+    # Also try to find in any log file that might contain duration info
+    log_files = sorted(glob.glob(join(logs_dir, '*.log')))
+    for log_file in log_files[:5]:  # Check first few log files
+        try:
+            with open(log_file, 'r') as f:
+                content = f.read()
+                # Look for duration patterns
+                match = re.search(r'Running benchmark\s*\((\d+)\s*sec\)', content)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            continue
+    
+    return None
+
+def generate_round_end_time_pivot(num_nodes=10, experiment_group=None, logs_dir=None, rate=None, imbalanced_rate=None, duration=None):
     """Generate round_end_time_pivot.csv from log files.
     
     Args:
         num_nodes: Number of nodes to process
         experiment_group: Optional experiment group identifier (for multi-experiment support)
         logs_dir: Optional custom logs directory (default: uses PathMaker.logs_path() or 'logs')
+        rate: Optional transaction rate (if None, will try to extract from logs)
+        imbalanced_rate: Optional imbalanced rate list (if None, will try to extract from logs)
+        duration: Optional duration in seconds (if None, will try to extract from logs)
     
     Returns:
         bool: True if successful, False otherwise
@@ -159,13 +257,47 @@ def generate_round_end_time_pivot(num_nodes=10, experiment_group=None, logs_dir=
                 except:
                     logs_dir = 'logs'
             
-            # Determine output filenames based on experiment group
+            # Extract rate from logs if not provided
+            if rate is None:
+                rate = extract_rate_from_logs(logs_dir)
+            
+            # Extract imbalanced_rate from logs if not provided
+            if imbalanced_rate is None:
+                imbalanced_rate = extract_imbalanced_rate_from_logs(logs_dir)
+            
+            # Extract duration from logs if not provided
+            if duration is None:
+                duration = extract_duration_from_logs(logs_dir)
+            
+            # Build filename suffix with rate, imbalanced_rate, and duration
+            suffix_parts = []
+            
+            if imbalanced_rate is not None and isinstance(imbalanced_rate, list) and len(imbalanced_rate) > 0:
+                # Format imbalanced_rate for filename: use sum or a compact representation
+                if len(imbalanced_rate) <= 10:
+                    # For short lists, include all values
+                    imbalanced_str = '_'.join(str(r) for r in imbalanced_rate)
+                    suffix_parts.append(f'imbalanced_{imbalanced_str}')
+                else:
+                    # For long lists, use sum
+                    imbalanced_sum = sum(imbalanced_rate)
+                    suffix_parts.append(f'imbalanced_sum{imbalanced_sum}')
+            elif rate is not None:
+                # Fall back to regular rate if imbalanced_rate not available
+                suffix_parts.append(f'rate{rate}')
+            
+            if duration is not None:
+                suffix_parts.append(f'duration{duration}')
+            
+            suffix = '_' + '_'.join(suffix_parts) if suffix_parts else ''
+            
+            # Determine output filenames based on experiment group and parameters
             if experiment_group is not None:
-                csv_filename = f'round_certificate_analysis_exp{experiment_group}.csv'
-                pivot_filename = f'round_end_time_pivot_exp{experiment_group}.csv'
+                csv_filename = f'round_certificate_analysis_exp{experiment_group}{suffix}.csv'
+                pivot_filename = f'round_end_time_pivot_exp{experiment_group}{suffix}.csv'
             else:
-                csv_filename = 'round_certificate_analysis.csv'
-                pivot_filename = 'round_end_time_pivot.csv'
+                csv_filename = f'round_certificate_analysis{suffix}.csv'
+                pivot_filename = f'round_end_time_pivot{suffix}.csv'
             
             # Remove existing CSV file if it exists (to start fresh)
             if os.path.exists(csv_filename):
@@ -299,7 +431,8 @@ Examples:
                 exp_success = generate_round_end_time_pivot(
                     num_nodes=args.num_nodes,
                     experiment_group=exp_group,
-                    logs_dir=exp_logs_dir
+                    logs_dir=exp_logs_dir,
+                    rate=None  # Will be extracted from logs
                 )
                 success = exp_success and success
         else:
@@ -307,7 +440,8 @@ Examples:
             pivot_success = generate_round_end_time_pivot(
                 num_nodes=args.num_nodes,
                 experiment_group=None,
-                logs_dir=args.logs_dir
+                logs_dir=args.logs_dir,
+                rate=None  # Will be extracted from logs
             )
             success = pivot_success and success
     

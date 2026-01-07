@@ -81,11 +81,20 @@ class LogParser:
         if search(r'Error', log) is not None:
             raise ParseError('Client(s) panicked')
 
-        size = int(search(r'Transactions size: (\d+)', log).group(1))
-        rate = int(search(r'Transactions rate: (\d+)', log).group(1))
+        size_match = search(r'Transactions size: (\d+)', log)
+        if size_match is None:
+            raise ParseError('Failed to find transaction size in client log')
+        size = int(size_match.group(1))
 
-        tmp = search(r'\[(.*Z) .* Start ', log).group(1)
-        start = self._to_posix(tmp)
+        rate_match = search(r'Transactions rate: (\d+)', log)
+        if rate_match is None:
+            raise ParseError('Failed to find transaction rate in client log')
+        rate = int(rate_match.group(1))
+
+        start_match = search(r'\[(.*Z) .* Start ', log)
+        if start_match is None:
+            raise ParseError('Failed to find start time in client log')
+        start = self._to_posix(start_match.group(1))
 
         misses = len(findall(r'rate too high', log))
 
@@ -106,31 +115,26 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        def _get_config(pattern, name):
+            match = search(pattern, log)
+            if match is None:
+                raise ParseError(f'Failed to find {name} in primary log')
+            return int(match.group(1))
+
         configs = {
-            'header_size': int(
-                search(r'Header size .* (\d+)', log).group(1)
-            ),
-            'max_header_delay': int(
-                search(r'Max header delay .* (\d+)', log).group(1)
-            ),
-            'gc_depth': int(
-                search(r'Garbage collection depth .* (\d+)', log).group(1)
-            ),
-            'sync_retry_delay': int(
-                search(r'Sync retry delay .* (\d+)', log).group(1)
-            ),
-            'sync_retry_nodes': int(
-                search(r'Sync retry nodes .* (\d+)', log).group(1)
-            ),
-            'batch_size': int(
-                search(r'Batch size .* (\d+)', log).group(1)
-            ),
-            'max_batch_delay': int(
-                search(r'Max batch delay .* (\d+)', log).group(1)
-            ),
+            'header_size': _get_config(r'Header size .* (\d+)', 'header_size'),
+            'max_header_delay': _get_config(r'Max header delay .* (\d+)', 'max_header_delay'),
+            'gc_depth': _get_config(r'Garbage collection depth .* (\d+)', 'gc_depth'),
+            'sync_retry_delay': _get_config(r'Sync retry delay .* (\d+)', 'sync_retry_delay'),
+            'sync_retry_nodes': _get_config(r'Sync retry nodes .* (\d+)', 'sync_retry_nodes'),
+            'batch_size': _get_config(r'Batch size .* (\d+)', 'batch_size'),
+            'max_batch_delay': _get_config(r'Max batch delay .* (\d+)', 'max_batch_delay'),
         }
 
-        ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
+        ip_match = search(r'booted on (\d+.\d+.\d+.\d+)', log)
+        if ip_match is None:
+            raise ParseError('Failed to find IP address in primary log')
+        ip = ip_match.group(1)
         
         return proposals, commits, configs, ip
 
@@ -144,7 +148,10 @@ class LogParser:
         tmp = findall(r'Batch ([^ ]+) contains sample tx (\d+)', log)
         samples = {int(s): d for d, s in tmp}
 
-        ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
+        ip_match = search(r'booted on (\d+.\d+.\d+.\d+)', log)
+        if ip_match is None:
+            raise ParseError('Failed to find IP address in worker log')
+        ip = ip_match.group(1)
 
         return sizes, samples, ip
 
@@ -238,6 +245,46 @@ class LogParser:
         assert isinstance(filename, str)
         with open(filename, 'a') as f:
             f.write(self.result())
+
+    def export_latency_csv(self):
+        """Export end-to-end latency data to CSV file.
+        
+        Returns:
+            str: Path to the exported CSV file, or None if no data available
+        """
+        if not hasattr(self, 'sent_samples') or not hasattr(self, 'received_samples'):
+            return None
+        
+        latency_data = []
+        for sent, received in zip(self.sent_samples, self.received_samples):
+            for tx_id, batch_id in received.items():
+                if batch_id in self.commits:
+                    if tx_id in sent:
+                        start = sent[tx_id]
+                        end = self.commits[batch_id]
+                        latency_ms = (end - start) * 1000  # Convert to milliseconds
+                        latency_data.append({
+                            'transaction_id': tx_id,
+                            'batch_id': batch_id,
+                            'latency_ms': latency_ms
+                        })
+        
+        if not latency_data:
+            return None
+        
+        # Export to CSV
+        from csv import DictWriter
+        from benchmark.utils import PathMaker
+        csv_path = join(PathMaker.results_path(), 'latency_data.csv')
+        
+        try:
+            with open(csv_path, 'w', newline='') as f:
+                writer = DictWriter(f, fieldnames=['transaction_id', 'batch_id', 'latency_ms'])
+                writer.writeheader()
+                writer.writerows(latency_data)
+            return csv_path
+        except Exception:
+            return None
 
     @classmethod
     def process(cls, directory, faults=0):

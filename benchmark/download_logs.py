@@ -123,6 +123,18 @@ def safe_get_file(conn, remote_path, local_path, timeout=30):
 
     sftp = None
     try:
+        # Ensure local directory exists and has correct permissions
+        local_path_obj = Path(local_path)
+        local_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        # Fix permissions if parent directory is owned by root
+        try:
+            import os
+            parent_stat = local_path_obj.parent.stat()
+            if parent_stat.st_uid == 0:  # Owned by root
+                os.chown(local_path_obj.parent, os.getuid(), os.getgid())
+        except Exception:
+            pass  # Ignore permission errors
+        
         with timeout_context(timeout):
             sftp = conn.sftp()
             sftp.get(remote_path, str(local_path), callback=_report_progress)
@@ -350,7 +362,7 @@ def collect_primary_logs_via_node0(conn, repo_name, host_info, node_indices=None
     return collected_logs, temp_dir
 
 def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
-    """Download logs from all CloudLab hosts via node0"""
+    """Download logs from all CloudLab hosts directly from local machine"""
     
     # Load settings
     try:
@@ -368,13 +380,7 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
         Print.error('No hosts configured')
         return False
     
-    # Get node0 (first node)
-    node0 = host_info[0]
-    node0_hostname = node0['hostname']
-    node0_username = node0.get('username', 'root')
-    node0_port = node0.get('port', 22)
-    
-    Print.info(f'Connecting to node0: {node0_username}@{node0_hostname}:{node0_port}')
+    Print.info(f'Downloading logs directly from {len(host_info)} nodes')
     Print.info(f'Repository name: {repo_name}')
     Print.info('=' * 60)
     sys.stdout.flush()
@@ -384,66 +390,93 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
         Print.error('Failed to load SSH key. Cannot proceed.')
         return False
     
-    # Create local logs directory
+    # Create local logs directory with proper permissions
     logs_dir = Path(PathMaker.logs_path())
     logs_dir.mkdir(parents=True, exist_ok=True)
-    
-    conn = None
-    temp_dir = None
+    # Fix permissions if directory is owned by root
     try:
-        # Connect to node0
-        Print.info('Connecting to node0...')
-        sys.stdout.flush()
-        conn = Connection(node0_hostname, user=node0_username, port=node0_port, 
-                         connect_kwargs=conn_kwargs, connect_timeout=30)
-        conn.open()
-        Print.info('✓ Connected to node0')
-        sys.stdout.flush()
-        
-        # Collect logs from all nodes via node0
-        collected_logs, temp_dir = collect_logs_via_node0(conn, repo_name, host_info, max_workers)
-        
-        # Download all collected logs from node0
-        Print.info('=' * 60)
-        Print.info('Downloading collected logs from node0...')
-        Print.info('=' * 60)
+        import stat
+        current_stat = logs_dir.stat()
+        if current_stat.st_uid == 0:  # Owned by root
+            import os
+            os.chown(logs_dir, os.getuid(), os.getgid())
+            Print.warn(f'  ⚠ Fixed logs directory ownership (was owned by root)')
+    except Exception:
+        pass  # Ignore permission errors
+    
+    # Download logs directly from each node
+    try:
+        Print.info('Downloading logs directly from all nodes...')
         sys.stdout.flush()
         
-        success_count = 0
-        fail_count = 0
-        
-        for node_idx, log_paths in collected_logs.items():
-            for log_path in log_paths:
-                # Determine local path based on log filename
-                log_filename = os.path.basename(log_path)
-                local_log = logs_dir / log_filename
-                local_log.parent.mkdir(parents=True, exist_ok=True)
+        for i, host in enumerate(host_info):
+            hostname = host['hostname']
+            username = host.get('username', 'root')
+            port = host.get('port', 22)
+            
+            Print.info(f'  [{i+1}/{len(host_info)}] Downloading from node{i} ({hostname})...')
+            sys.stdout.flush()
+            
+            # Helper function to download a single file with fresh connection
+            def download_file_with_fresh_conn(remote_path, local_path, file_desc):
+                """Download a file using a fresh connection"""
+                conn = None
+                try:
+                    conn = Connection(hostname, user=username, port=port, 
+                                     connect_kwargs=conn_kwargs, connect_timeout=30)
+                    conn.open()
+                    safe_get_file(conn, remote_path, str(local_path))
+                    return True
+                except FileNotFoundError:
+                    return False  # File not found is OK
+                except Exception as e:
+                    Print.warn(f'    ⚠ Failed to download {file_desc}: {e}')
+                    return False
+                finally:
+                    if conn:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+            
+            try:
+                # Download primary log
+                # PathMaker.primary_log_file() returns 'logs/primary-{i}.log'
+                # logs_dir is already 'logs/', so we need to use just the filename
+                remote_log = f'{repo_name}/{PathMaker.primary_log_file(i)}'
+                log_filename = f'primary-{i}.log'
+                local_log_path = logs_dir / log_filename
                 
-                Print.info(f'  Downloading {log_filename}...')
+                Print.info(f'    Downloading primary-{i}.log...')
                 sys.stdout.flush()
                 
-                try:
-                    safe_get_file(conn, log_path, local_log, timeout=30)
-                    Print.info(f'  ✓ Downloaded {log_filename}')
-                    success_count += 1
-                    sys.stdout.flush()
-                except Exception as e:
-                    Print.warn(f'  ⚠ Failed to download {log_filename}: {str(e)[:100]}')
-                    fail_count += 1
-                    sys.stdout.flush()
+                if download_file_with_fresh_conn(remote_log, local_log_path, f'primary-{i}.log'):
+                    Print.info(f'    ✓ Downloaded primary-{i}.log')
+                else:
+                    Print.warn(f'    ⚠ primary-{i}.log not found or failed to download')
+                
+                # Download worker logs
+                for j in range(max_workers):
+                    remote_log = f'{repo_name}/{PathMaker.worker_log_file(i, j)}'
+                    log_filename = f'worker-{i}-{j}.log'
+                    local_log_path = logs_dir / log_filename
+                    
+                    download_file_with_fresh_conn(remote_log, local_log_path, f'worker-{i}-{j}.log')
+                
+                # Download client logs
+                for j in range(max_workers):
+                    remote_log = f'{repo_name}/{PathMaker.client_log_file(i, j)}'
+                    log_filename = f'client-{i}-{j}.log'
+                    local_log_path = logs_dir / log_filename
+                    
+                    download_file_with_fresh_conn(remote_log, local_log_path, f'client-{i}-{j}.log')
+                
+            except Exception as e:
+                Print.warn(f'  ⚠ Failed to connect to node{i} ({hostname}): {e}')
+                continue
         
-        # Clean up temporary directory on node0
-        if temp_dir:
-            Print.info(f'Cleaning up temporary directory on node0...')
-            sys.stdout.flush()
-            conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
-        
-        Print.info('=' * 60)
-        Print.info(f'Download complete: {success_count} succeeded, {fail_count} failed')
-        Print.info(f'Logs saved to: {logs_dir.absolute()}')
-        sys.stdout.flush()
-        
-        return fail_count == 0
+        Print.info('✓ Log download completed')
+        return True
         
     except KeyboardInterrupt:
         Print.warn('\n✗ Interrupted by user')
@@ -454,19 +487,9 @@ def download_logs(settings_file='cloudlab_settings.json', max_workers=1):
             error_msg = error_msg[:200] + '...'
         Print.error(f'✗ Failed: {error_msg}')
         return False
-    finally:
-        # Clean up connection
-        if conn:
-            try:
-                # Clean up temp directory if still exists
-                if temp_dir:
-                    conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
-                conn.close()
-            except Exception:
-                pass
 
 def download_primary_logs(settings_file='cloudlab_settings.json', node_indices=None):
-    """Download primary logs from specified CloudLab nodes via node0"""
+    """Download primary logs from specified CloudLab nodes directly from local machine"""
     
     # Load settings
     try:
@@ -488,15 +511,9 @@ def download_primary_logs(settings_file='cloudlab_settings.json', node_indices=N
     if node_indices is None:
         node_indices = list(range(len(host_info)))
     
-    # Get node0 (first node)
-    node0 = host_info[0]
-    node0_hostname = node0['hostname']
-    node0_username = node0.get('username', 'root')
-    node0_port = node0.get('port', 22)
-    
-    Print.info(f'Connecting to node0: {node0_username}@{node0_hostname}:{node0_port}')
+    Print.info(f'Downloading primary logs directly from {len(node_indices)} nodes')
     Print.info(f'Repository name: {repo_name}')
-    Print.info(f'Downloading primary logs from nodes: {node_indices}')
+    Print.info(f'Node indices: {node_indices}')
     Print.info('=' * 60)
     sys.stdout.flush()
     
@@ -505,63 +522,89 @@ def download_primary_logs(settings_file='cloudlab_settings.json', node_indices=N
         Print.error('Failed to load SSH key. Cannot proceed.')
         return False
     
-    # Create local logs directory
+    # Create local logs directory with proper permissions
     logs_dir = Path(PathMaker.logs_path())
     logs_dir.mkdir(parents=True, exist_ok=True)
-    
-    conn = None
-    temp_dir = None
+    # Fix permissions if directory is owned by root
     try:
-        # Connect to node0
-        Print.info('Connecting to node0...')
-        sys.stdout.flush()
-        conn = Connection(node0_hostname, user=node0_username, port=node0_port, 
-                         connect_kwargs=conn_kwargs, connect_timeout=30)
-        conn.open()
-        Print.info('✓ Connected to node0')
-        sys.stdout.flush()
-        
-        # Collect primary logs from specified nodes via node0
-        collected_logs, temp_dir = collect_primary_logs_via_node0(conn, repo_name, host_info, node_indices)
-        
-        # Download all collected logs from node0
-        Print.info('=' * 60)
-        Print.info('Downloading collected primary logs from node0...')
-        Print.info('=' * 60)
+        import stat
+        current_stat = logs_dir.stat()
+        if current_stat.st_uid == 0:  # Owned by root
+            import os
+            os.chown(logs_dir, os.getuid(), os.getgid())
+            Print.warn(f'  ⚠ Fixed logs directory ownership (was owned by root)')
+    except Exception:
+        pass  # Ignore permission errors
+    
+    # Download logs directly from each specified node
+    try:
+        Print.info('Downloading primary logs directly from all nodes...')
         sys.stdout.flush()
         
         success_count = 0
         fail_count = 0
         
-        for node_idx, log_paths in collected_logs.items():
-            for log_path in log_paths:
-                # Determine local path based on log filename
-                log_filename = os.path.basename(log_path)
-                local_log = logs_dir / log_filename
-                local_log.parent.mkdir(parents=True, exist_ok=True)
+        for idx, i in enumerate(node_indices):
+            if i >= len(host_info):
+                Print.warn(f'  ⚠ Node{i} index out of range, skipping...')
+                continue
+            
+            host = host_info[i]
+            hostname = host['hostname']
+            username = host.get('username', 'root')
+            port = host.get('port', 22)
+            
+            Print.info(f'  [{idx+1}/{len(node_indices)}] Downloading from node{i} ({hostname})...')
+            sys.stdout.flush()
+            
+            # Helper function to download a single file with fresh connection
+            def download_file_with_fresh_conn(remote_path, local_path, file_desc):
+                """Download a file using a fresh connection"""
+                conn = None
+                try:
+                    conn = Connection(hostname, user=username, port=port, 
+                                     connect_kwargs=conn_kwargs, connect_timeout=30)
+                    conn.open()
+                    safe_get_file(conn, remote_path, str(local_path))
+                    return True
+                except FileNotFoundError:
+                    return False  # File not found
+                except Exception as e:
+                    Print.warn(f'    ⚠ Failed to download {file_desc}: {e}')
+                    return False
+                finally:
+                    if conn:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+            
+            try:
+                # Download primary log
+                # PathMaker.primary_log_file() returns 'logs/primary-{i}.log'
+                # logs_dir is already 'logs/', so we need to use just the filename
+                remote_log = f'{repo_name}/{PathMaker.primary_log_file(i)}'
+                log_filename = f'primary-{i}.log'
+                local_log_path = logs_dir / log_filename
                 
-                Print.info(f'  Downloading {log_filename}...')
+                Print.info(f'    Downloading primary-{i}.log...')
                 sys.stdout.flush()
                 
-                try:
-                    safe_get_file(conn, log_path, local_log, timeout=30)
-                    Print.info(f'  ✓ Downloaded {log_filename}')
+                if download_file_with_fresh_conn(remote_log, local_log_path, f'primary-{i}.log'):
+                    Print.info(f'    ✓ Downloaded primary-{i}.log')
                     success_count += 1
-                    sys.stdout.flush()
-                except Exception as e:
-                    Print.warn(f'  ⚠ Failed to download {log_filename}: {str(e)[:100]}')
+                else:
+                    Print.warn(f'    ⚠ primary-{i}.log not found or failed to download')
                     fail_count += 1
-                    sys.stdout.flush()
-        
-        # Clean up temporary directory on node0
-        if temp_dir:
-            Print.info(f'Cleaning up temporary directory on node0...')
-            sys.stdout.flush()
-            conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
+                
+            except Exception as e:
+                Print.warn(f'  ⚠ Failed to connect to node{i} ({hostname}): {e}')
+                fail_count += 1
+                continue
         
         Print.info('=' * 60)
         Print.info(f'Download complete: {success_count} succeeded, {fail_count} failed')
-        Print.info(f'Primary logs saved to: {logs_dir.absolute()}')
+        Print.info(f'Logs saved to: {logs_dir.absolute()}')
         sys.stdout.flush()
         
         return fail_count == 0
@@ -575,16 +618,6 @@ def download_primary_logs(settings_file='cloudlab_settings.json', node_indices=N
             error_msg = error_msg[:200] + '...'
         Print.error(f'✗ Failed: {error_msg}')
         return False
-    finally:
-        # Clean up connection
-        if conn:
-            try:
-                # Clean up temp directory if still exists
-                if temp_dir:
-                    conn.run(f'rm -rf {temp_dir}', hide=True, warn=True)
-                conn.close()
-            except Exception:
-                pass
 
 if __name__ == '__main__':
     import argparse
