@@ -27,12 +27,13 @@ def local(ctx, debug=True):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'faults': 0,
-        'nodes': 4,
+        'nodes': 10,
         'workers': 1,
-        'rate': 35000,
+        'collocate': True,
+        'rate_type': 'imbalanced',
+        'imbalanced_rate': [15000, 16000, 17000, 18000, 19000, 20000, 21000, 22000, 23000, 24000],
         'tx_size': 512,
-        'duration': 90,
-        'trigger_attack': True
+        'duration': 90
     }
     node_params = {
         'header_size': 1_000,  # bytes
