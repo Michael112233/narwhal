@@ -176,7 +176,7 @@ impl Consensus {
                     debug!("Latest commit of {}: Round {}", name, round);
                 }
             }
-
+            
             // Output the sequence in the right order.
             for certificate in sequence {
                 #[cfg(not(feature = "benchmark"))]

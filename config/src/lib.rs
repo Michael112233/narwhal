@@ -140,6 +140,8 @@ pub struct Authority {
 #[derive(Clone, Deserialize)]
 pub struct Committee {
     pub authorities: BTreeMap<PublicKey, Authority>,
+    pub solid_step_length: usize,
+    pub solid_step_number: usize,
 }
 
 impl Import for Committee {}
@@ -243,6 +245,22 @@ impl Committee {
                     .map(|(_, addresses)| (*name, addresses.clone()))
             })
             .collect()
+    }
+
+    /// Returns the number of the solid wave.
+    pub fn solid_wave_length(&self) -> usize {
+        self.solid_step_length * self.solid_step_number + 1
+    }
+
+    /// Returns true if the solid wave is completed.
+    pub fn is_solid_wave_completed(&self, round: usize) -> bool {
+        round % self.solid_wave_length() == 0
+    }
+
+    /// Retures true if the solid step is completed.
+    pub fn is_solid_step_completed(&self, round: usize) -> bool {
+        let round_in_step = round % self.solid_wave_length();
+        round_in_step % self.solid_step_length == 0
     }
 }
 

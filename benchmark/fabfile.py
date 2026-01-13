@@ -16,9 +16,9 @@ def local(ctx, debug=True):
         'faults': 0,
         'nodes': 4,
         'workers': 1,
-        'rate': 480000,
+        'rate': 120000,
         'tx_size': 512,
-        'duration': 120,
+        'duration': 20,
     }
     node_params = {
         'header_size': 1_000,  # bytes
@@ -27,7 +27,11 @@ def local(ctx, debug=True):
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 200,  # ms
+        # protocol structure
+        'solid_step_length': 2,
+        'reference': 3, # 2f+1
+        'solid_step_number': 2
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
