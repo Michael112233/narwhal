@@ -116,6 +116,8 @@ impl Consensus {
                 .or_insert_with(HashMap::new)
                 .insert(certificate.origin(), (certificate.digest(), certificate));
 
+            self.visualize_dag(&state, round);
+
             // Try to order the dag to commit. Start from the highest round for which we have at least
             // 2f+1 certificates. This is because we need them to reveal the common coin.
             let r = round - 1;
@@ -298,5 +300,72 @@ impl Consensus {
         // Ordering the output by round is not really necessary but it makes the commit sequence prettier.
         ordered.sort_by_key(|x| x.round());
         ordered
+    }
+
+    fn visualize_dag(&self, state: &State, current_round: Round) {
+        // map from the authority to the node number
+        let mut author_to_node: HashMap<PublicKey, usize> = HashMap::new();
+        let mut node_counter = 0;
+        for (authority, _) in &self.committee.authorities {
+            author_to_node.insert(*authority, node_counter);
+            node_counter += 1;
+        }
+
+        // from current_round to round 1, reverse
+        for round in (1..=current_round).rev() {
+            if state.dag.contains_key(&round) {
+                let round_certs = state.dag.get(&round).unwrap();
+                let mut round_output = format!("Round {}:", round);
+                let mut vertices = Vec::new();
+                
+                let mut sorted_certs: Vec<_> = round_certs.iter().collect();
+                sorted_certs.sort_by_key(|(author, _)| *author);
+
+                for (author, (cert_digest, certificate)) in sorted_certs {
+                    let node_id = author_to_node.get(author).unwrap_or(&999);
+                    let vertex_name = format!("Vertex{}", node_id);
+                    
+                    // find the parent nodes
+                    let mut parents = Vec::new();
+                    for parent_digest in &certificate.header.parents {
+                        // find the parent certificate in the dag
+                        if let Some((parent_round, parent_author)) = self.find_certificate_in_dag(state, parent_digest) {
+                            let parent_node_id = author_to_node.get(&parent_author).unwrap_or(&999);
+                            parents.push(format!("[{},{}]", parent_round, parent_node_id));
+                        } else {
+                            // if the block is genesis, do not need to output
+                            if round != 1 {
+                                parents.push("[?,?]".to_string());
+                            }
+                        }
+                    }
+                    
+                    let parent_str = if parents.is_empty() {
+                        "[]".to_string()
+                    } else {
+                        format!("[{}]", parents.join(", "))
+                    };
+                    
+                    vertices.push(format!("({}){}", vertex_name, parent_str));
+                }
+                
+                if !vertices.is_empty() {
+                    round_output.push_str(&format!(" {} ", vertices.join(" --- ")));
+                    info!("{}", round_output);
+                }
+            }
+        }
+    }
+
+    fn find_certificate_in_dag(&self, state: &State, digest: &Digest) -> Option<(Round, PublicKey)> {
+        for (round, round_certs) in &state.dag {
+            for (author, (cert_digest, certificate)) in round_certs {
+                // check if the digest is the header.id or certificate.digest()
+                if cert_digest == digest || &certificate.header.id == digest {
+                    return Some((*round, *author));
+                }
+            }
+        }
+        None
     }
 }
