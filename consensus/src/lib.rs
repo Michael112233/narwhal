@@ -51,12 +51,12 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        for (name, round) in &self.last_committed {
-            self.dag.retain(|r, authorities| {
-                authorities.retain(|n, _| n != name || r >= round);
-                !authorities.is_empty() && r + gc_depth >= last_committed_round
-            });
-        }
+        // for (name, round) in &self.last_committed {
+        //     self.dag.retain(|r, authorities| {
+        //         authorities.retain(|n, _| n != name || r >= round);
+        //         !authorities.is_empty() && r + gc_depth >= last_committed_round
+        //     });
+        // }
     }
 }
 
@@ -123,13 +123,14 @@ impl Consensus {
             let r = round - 1;
 
             // We only elect leaders for even round numbers.
-            if r % 2 != 0 || r < 4 {
+            debug!("r: {}, solid_step_length: {}", r, self.committee.solid_step_length());
+            if r % self.committee.solid_step_length() != 0 || r < self.committee.solid_wave_length() {
                 continue;
             }
 
             // Get the certificate's digest of the leader of round r-2. If we already ordered this leader,
             // there is nothing to do.
-            let leader_round = r - 2;
+            let leader_round = r - self.committee.solid_step_length();
             if leader_round <= state.last_committed_round {
                 continue;
             }
@@ -147,12 +148,11 @@ impl Consensus {
                 .filter(|(_, x)| x.header.parents.contains(&leader_digest))
                 .map(|(_, x)| self.committee.stake(&x.origin()))
                 .sum();
-
             // If it is the case, we can commit the leader. But first, we need to recursively go back to
             // the last committed leader, and commit all preceding leaders in the right order. Committing
             // a leader block means committing all its dependencies.
             if stake < self.committee.validity_threshold() {
-                debug!("Leader {:?} does not have enough support", leader);
+                debug!("Current stake is {}. Leader {:?} does not have enough support", stake, leader);
                 continue;
             }
 
@@ -176,7 +176,7 @@ impl Consensus {
                     debug!("Latest commit of {}: Round {}", name, round);
                 }
             }
-            
+
             // Output the sequence in the right order.
             for certificate in sequence {
                 #[cfg(not(feature = "benchmark"))]
@@ -224,7 +224,7 @@ impl Consensus {
     fn order_leaders(&self, leader: &Certificate, state: &State) -> Vec<Certificate> {
         let mut to_commit = vec![leader.clone()];
         let mut leader = leader;
-        for r in (state.last_committed_round + 2..leader.round())
+        for r in (state.last_committed_round + self.committee.solid_step_length()..leader.round())
             .rev()
             .step_by(2)
         {
@@ -331,7 +331,12 @@ impl Consensus {
                         // find the parent certificate in the dag
                         if let Some((parent_round, parent_author)) = self.find_certificate_in_dag(state, parent_digest) {
                             let parent_node_id = author_to_node.get(&parent_author).unwrap_or(&999);
-                            parents.push(format!("[{},{}]", parent_round, parent_node_id));
+                            let is_weak = parent_round + 1 != round;
+                            if is_weak {
+                                parents.push(format!("[w{},{}]", parent_round, parent_node_id));
+                            } else {
+                                parents.push(format!("[{},{}]", parent_round, parent_node_id));
+                            }
                         } else {
                             // if the block is genesis, do not need to output
                             if round != 1 {

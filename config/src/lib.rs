@@ -172,6 +172,13 @@ impl Committee {
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         2 * total_votes / 3 + 1
+        // (total_votes + 2) / 3
+    }
+
+    pub fn processing_threshold(&self) -> Stake {
+        // Apart from the quorum threshold, this is specially for processing headers.
+        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        (total_votes + 2) / 3
     }
 
     /// Returns the stake required to reach availability (f+1).
@@ -248,19 +255,28 @@ impl Committee {
     }
 
     /// Returns the number of the solid wave.
-    pub fn solid_wave_length(&self) -> usize {
-        self.solid_step_length * self.solid_step_number + 1
+    pub fn solid_wave_length(&self) -> u64 {
+        self.solid_step_length as u64 * self.solid_step_number as u64
     }
 
-    /// Returns true if the solid wave is completed.
-    pub fn is_solid_wave_completed(&self, round: usize) -> bool {
-        round % self.solid_wave_length() == 0
+    // /// Returns true if the solid wave is completed.
+    // pub fn is_solid_wave_completed(&self, round: u64) -> bool {
+    //     round > 0 && round % self.solid_wave_length() == 0
+    // }
+
+    // /// Retures true if the solid step is completed .
+    // pub fn is_solid_step_completed(&self, round: u64) -> bool {
+    //     round > 0 && round % self.solid_step_length() == 0
+    // }
+
+    /// Returns the length of the solid step.
+    pub fn solid_step_length(&self) -> u64 {
+        self.solid_step_length as u64
     }
 
-    /// Retures true if the solid step is completed.
-    pub fn is_solid_step_completed(&self, round: usize) -> bool {
-        let round_in_step = round % self.solid_wave_length();
-        round_in_step % self.solid_step_length == 0
+    /// Returns the number of the solid step.
+    pub fn solid_step_number(&self) -> u64 {
+        self.solid_step_number as u64
     }
 }
 
