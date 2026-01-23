@@ -2,6 +2,7 @@
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote};
 use config::{Committee, Stake};
+use crate::primary::Round;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use std::collections::HashSet;
@@ -48,17 +49,23 @@ impl VotesAggregator {
 
 /// Aggregate certificates and check if we reach a quorum.
 pub struct CertificatesAggregator {
+    expected_round: Round,
     weight: Stake,
     certificates: Vec<Digest>,
+    weak_certificates: Vec<Digest>,
     used: HashSet<PublicKey>,
+    has_quorum: bool,
 }
 
 impl CertificatesAggregator {
-    pub fn new() -> Self {
+    pub fn new(expected_round: Round) -> Self {
         Self {
+            expected_round,
             weight: 0,
             certificates: Vec::new(),
+            weak_certificates: Vec::new(),
             used: HashSet::new(),
+            has_quorum: false,
         }
     }
 
@@ -74,11 +81,28 @@ impl CertificatesAggregator {
             return Ok(None);
         }
 
-        self.certificates.push(certificate.digest());
-        self.weight += committee.stake(&origin);
-        if self.weight >= committee.quorum_threshold() {
-            self.weight = 0; // Ensures quorum is only reached once.
-            return Ok(Some(self.certificates.drain(..).collect()));
+        if certificate.round() == self.expected_round {
+            self.certificates.push(certificate.digest());
+            self.weight += committee.stake(&origin);
+        } else if certificate.round() < self.expected_round {
+            // self.weak_certificates.push(certificate.digest());
+            if certificate.round() + committee.solid_step_length() == self.expected_round {
+                self.certificates.push(certificate.digest());
+                self.weight += committee.stake(&origin);
+            }
+        }
+
+        if self.weight >= committee.processing_threshold() {
+            self.has_quorum = true;
+        }
+
+        if self.has_quorum {
+            let mut all = Vec::with_capacity(
+                self.certificates.len() + self.weak_certificates.len(),
+            );
+            all.extend(self.certificates.iter().cloned());
+            all.extend(self.weak_certificates.iter().cloned());
+            return Ok(Some(all));
         }
         Ok(None)
     }

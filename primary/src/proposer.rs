@@ -18,6 +18,8 @@ pub mod proposer_tests;
 pub struct Proposer {
     /// The public key of this primary.
     name: PublicKey,
+    /// Node index for logging.
+    node_id: Option<usize>,
     /// Service to sign headers.
     signature_service: SignatureService,
     /// The size of the headers' payload.
@@ -54,6 +56,10 @@ impl Proposer {
         rx_workers: Receiver<(Digest, WorkerId)>,
         tx_core: Sender<Header>,
     ) {
+        let node_id = committee
+            .authorities
+            .keys()
+            .position(|authority| authority == &name);
         let genesis = Certificate::genesis(committee)
             .iter()
             .map(|x| x.digest())
@@ -62,6 +68,7 @@ impl Proposer {
         tokio::spawn(async move {
             Self {
                 name,
+                node_id,
                 signature_service,
                 header_size,
                 max_header_delay,
@@ -88,6 +95,15 @@ impl Proposer {
             &mut self.signature_service,
         )
         .await;
+        let origin_node = self
+            .node_id
+            .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
+        debug!(
+            "Created header {} (origin Node{}, round {})",
+            header.id,
+            origin_node,
+            header.round
+        );
         debug!("Created {:?}", header);
 
         #[cfg(feature = "benchmark")]
@@ -132,11 +148,13 @@ impl Proposer {
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
                     if round < self.round {
+                        debug!("Received header for round {} but we are at round {}", round, self.round);
                         continue;
                     }
 
                     // Advance to the next round.
-                    self.round = round + 1;
+                    // self.round = round + 1;
+                    self.round = std::cmp::max(self.round, round) + 1;
                     debug!("Dag moved to round {}", self.round);
 
                     // Signal that we have enough parent certificates to propose a new header.
