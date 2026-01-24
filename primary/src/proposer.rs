@@ -7,6 +7,8 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
+use std::collections::HashSet;
+use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -42,6 +44,10 @@ pub struct Proposer {
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
     payload_size: usize,
+    /// The solid step length.
+    solid_step_length: u64,
+    /// The persistent storage.
+    store: Store,
 }
 
 impl Proposer {
@@ -55,6 +61,7 @@ impl Proposer {
         rx_core: Receiver<(Vec<Digest>, Round)>,
         rx_workers: Receiver<(Digest, WorkerId)>,
         tx_core: Sender<Header>,
+        store: Store,
     ) {
         let node_id = committee
             .authorities
@@ -64,6 +71,7 @@ impl Proposer {
             .iter()
             .map(|x| x.digest())
             .collect();
+        let solid_step_length = committee.solid_step_length() as u64;
 
         tokio::spawn(async move {
             Self {
@@ -79,6 +87,8 @@ impl Proposer {
                 last_parents: genesis,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
+                solid_step_length,
+                store,
             }
             .run()
             .await;
@@ -87,7 +97,7 @@ impl Proposer {
 
     async fn make_header(&mut self) {
         // Make a new header.
-        let header = Header::new(
+        let mut header = Header::new(
             self.name,
             self.round,
             self.digests.drain(..).collect(),
@@ -105,6 +115,29 @@ impl Proposer {
             header.round
         );
         debug!("Created {:?}", header);
+
+        // Store the nodes which can be linked to in the first round
+        if self.round % self.solid_step_length != 1 {
+            debug!("the number of the parents is {}", header.parents.len());
+            if (self.round - 1) % self.solid_step_length == 1 {
+                let vertices: HashSet<_> = header.parents.iter().cloned().collect();
+                header.store_solid_step_vertex(vertices);
+            } else {
+                let parents: Vec<_> = header.parents.iter().cloned().collect();
+                let mut merged = HashSet::new();
+
+                for parent in parents {
+                    let bytes = self.store.notify_read(parent.to_vec()).await.unwrap();
+                    let cert: Certificate = bincode::deserialize(&bytes).unwrap();
+                    if cert.round() == self.round - 1 {
+                        merged.extend(cert.header.solid_step_vertices);
+                    }
+                }
+
+                header.store_solid_step_vertex(merged);
+            }
+            debug!("Current round: {}, The number of the solid step vertices is {}", self.round, header.solid_step_vertices.len());
+        }
 
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
