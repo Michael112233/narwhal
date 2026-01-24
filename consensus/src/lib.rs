@@ -327,13 +327,16 @@ impl Consensus {
                     
                     // find the parent nodes
                     let mut parents = Vec::new();
+                    let mut weak_parents = Vec::new();
                     for parent_digest in &certificate.header.parents {
                         // find the parent certificate in the dag
                         if let Some((parent_round, parent_author)) = self.find_certificate_in_dag(state, parent_digest) {
                             let parent_node_id = author_to_node.get(&parent_author).unwrap_or(&999);
                             let is_weak = parent_round + 1 != round;
                             if is_weak {
-                                parents.push(format!("[w{},{}]", parent_round, parent_node_id));
+                                let weak_entry = format!("[w{},{}]", parent_round, parent_node_id);
+                                parents.push(weak_entry.clone());
+                                weak_parents.push(weak_entry);
                             } else {
                                 parents.push(format!("[{},{}]", parent_round, parent_node_id));
                             }
@@ -351,7 +354,17 @@ impl Consensus {
                         format!("[{}]", parents.join(", "))
                     };
                     
-                    vertices.push(format!("({}){}", vertex_name, parent_str));
+                    let vertex_str = if weak_parents.is_empty() {
+                        format!("({}){}", vertex_name, parent_str)
+                    } else {
+                        format!(
+                            "({}){} weak=[{}]",
+                            vertex_name,
+                            parent_str,
+                            weak_parents.join(", ")
+                        )
+                    };
+                    vertices.push(vertex_str);
                 }
                 
                 if !vertices.is_empty() {

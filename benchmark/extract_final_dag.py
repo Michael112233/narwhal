@@ -13,7 +13,7 @@ from typing import Dict, List, Any
 
 
 ROUND_LINE_RE = re.compile(r"\bRound\s+(\d+):\s+(.*)")
-VERTEX_RE = re.compile(r"\(Vertex(\d+)\)\[([^\]]*)\]")
+VERTEX_RE = re.compile(r"\(Vertex(\d+)\)\[([^\]]*)\](?:\s+weak=\[([^\]]*)\])?")
 PARENT_RE = re.compile(r"\[(w?)(\d+|\?),\s*(\d+|\?)\]")
 
 
@@ -28,6 +28,7 @@ def parse_round_line(line: str) -> Dict[str, Any]:
     for vertex_match in VERTEX_RE.finditer(payload):
         vertex_id = int(vertex_match.group(1))
         parents_blob = vertex_match.group(2).strip()
+        weak_blob = (vertex_match.group(3) or "").strip()
         parents = []
         if parents_blob:
             for parent_match in PARENT_RE.finditer(parents_blob):
@@ -38,7 +39,23 @@ def parse_round_line(line: str) -> Dict[str, Any]:
                     "weak": weak_flag == "w",
                 }
                 parents.append(parent)
-        vertices.append({"vertex": vertex_id, "parents": parents})
+        weak_parents = []
+        if weak_blob:
+            for parent_match in PARENT_RE.finditer(weak_blob):
+                weak_flag, round_str, node_str = parent_match.groups()
+                parent = {
+                    "round": None if round_str == "?" else int(round_str),
+                    "node": None if node_str == "?" else int(node_str),
+                    "weak": True if weak_flag == "w" else True,
+                }
+                weak_parents.append(parent)
+        vertices.append(
+            {
+                "vertex": vertex_id,
+                "parents": parents,
+                "weak_parents": weak_parents,
+            }
+        )
 
     return {"round": round_num, "vertices": vertices, "raw": payload}
 

@@ -85,7 +85,7 @@ impl CertificatesAggregator {
             self.certificates.push(certificate.digest());
             self.weight += committee.stake(&origin);
         } else if certificate.round() < self.expected_round {
-            // self.weak_certificates.push(certificate.digest());
+            self.weak_certificates.push(certificate.digest());
             if certificate.round() + committee.solid_step_length() == self.expected_round {
                 self.certificates.push(certificate.digest());
                 self.weight += committee.stake(&origin);

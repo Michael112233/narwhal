@@ -22,6 +22,7 @@ async fn propose_empty() {
         /* rx_core */ rx_parents,
         /* rx_workers */ rx_our_digests,
         /* tx_core */ tx_headers,
+        store.clone(),
     );
 
     // Ensure the proposer makes a correct empty header.
@@ -40,6 +41,11 @@ async fn propose_payload() {
     let (tx_our_digests, rx_our_digests) = channel(1);
     let (tx_headers, mut rx_headers) = channel(1);
 
+    // Create a new test store.
+    let path = ".db_test_propose_payload";
+    let _ = fs::remove_dir_all(path);
+    let store = Store::new(path).unwrap();
+
     // Spawn the proposer.
     Proposer::spawn(
         name,
@@ -50,6 +56,7 @@ async fn propose_payload() {
         /* rx_core */ rx_parents,
         /* rx_workers */ rx_our_digests,
         /* tx_core */ tx_headers,
+        store.clone(),
     );
 
     // Send enough digests for the header payload.

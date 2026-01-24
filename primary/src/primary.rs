@@ -195,6 +195,7 @@ impl Primary {
             /* rx_core */ rx_parents,
             /* rx_workers */ rx_our_digests,
             /* tx_core */ tx_headers,
+            store.clone(),
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.
