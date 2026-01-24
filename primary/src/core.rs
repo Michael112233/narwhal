@@ -222,8 +222,8 @@ impl Core {
             self.votes_aggregator
                 .append(vote, &self.committee, &self.current_header)?
         {
-            debug!("Assembled {:?}", certificate);
-
+            // debug!("Assembled {:?}", certificate);
+            debug!("Assembled {:?}. The header's id is {:?}", certificate, self.current_header.id);
             // Broadcast the certificate.
             let addresses = self
                 .committee

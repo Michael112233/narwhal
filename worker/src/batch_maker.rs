@@ -8,7 +8,7 @@ use crypto::PublicKey;
 #[cfg(feature = "benchmark")]
 use ed25519_dalek::{Digest as _, Sha512};
 #[cfg(feature = "benchmark")]
-use log::info;
+use log::{debug, info};
 use network::ReliableSender;
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
@@ -76,6 +76,10 @@ impl BatchMaker {
             tokio::select! {
                 // Assemble client transactions into batches of preset size.
                 Some(transaction) = self.rx_transaction.recv() => {
+                    // If the current batch is empty, start the timer.
+                    if self.current_batch.is_empty() {
+                        debug!("Start to generate batch")
+                    }
                     self.current_batch_size += transaction.len();
                     self.current_batch.push(transaction);
                     if self.current_batch_size >= self.batch_size {
@@ -135,7 +139,6 @@ impl BatchMaker {
                     u64::from_be_bytes(id)
                 );
             }
-
             // NOTE: This log entry is used to compute performance.
             info!("Batch {:?} contains {} B", digest, size);
         }
