@@ -88,7 +88,7 @@ impl Proposer {
             &mut self.signature_service,
         )
         .await;
-        debug!("Created {:?}", header);
+        debug!("Created {:?}. Digest number {}", header, header.payload.len());
 
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
@@ -143,6 +143,9 @@ impl Proposer {
                     self.last_parents = parents;
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
+                    if self.digests.is_empty() {
+                        debug!("Received first digest for round {}, digest: {:?}", self.round, digest);
+                    }
                     self.payload_size += digest.size();
                     self.digests.push((digest, worker_id));
                 }
