@@ -175,18 +175,19 @@ impl Core {
         // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
         let mut stake = 0;
         for x in parents {
-            if x.round() + 1 > header.round {
-                debug!("Parent {:?} is from round {}, while the header is from round {}", x, x.round(), header.round);
+            if x.round() + self.committee.solid_step_length() < header.round && x.round() > header.round {
+                debug!("Parent {:?} is from round {}, while the header round should be in range from round {} to {}", x, x.round(), header.round - self.committee.solid_step_length(), header.round);
                 continue;
             }
             ensure!(
-                x.round() + 1 <= header.round,
+                x.round() + self.committee.solid_step_length() >= header.round && x.round() <= header.round,
                 DagError::MalformedHeader(header.id.clone())
             );
             stake += self.committee.stake(&x.origin());
         }
         ensure!(
-            stake >= self.committee.processing_threshold(),
+            stake >= self.committee.processing_threshold(header.round as u64),
+            // debug!("Stake: {}, Processing threshold: {}", stake, self.committee.processing_threshold(header.round as u64));
             DagError::HeaderRequiresQuorum(header.id.clone())
         );
 

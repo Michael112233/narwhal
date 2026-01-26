@@ -171,14 +171,19 @@ impl Committee {
         // If N = 3f + 1 + k (0 <= k < 3)
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        2 * total_votes / 3 + 1
-        // (total_votes + 2) / 3
+        // 2 * total_votes / 3 + 1
+        (total_votes + 2) / 3
     }
 
-    pub fn processing_threshold(&self) -> Stake {
+    pub fn processing_threshold(&self, current_round: u64) -> Stake {
         // Apart from the quorum threshold, this is specially for processing headers.
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        (total_votes + 2) / 3
+        if current_round % self.solid_step_length() as u64 == 1 && current_round > 1 {
+            // return 2 * total_votes / 3 + 1;
+            return (total_votes + 2) / 3;
+        } else {
+            return (total_votes + 2) / 3;
+        }
     }
 
     /// Returns the stake required to reach availability (f+1).
