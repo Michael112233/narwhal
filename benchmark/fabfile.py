@@ -16,22 +16,22 @@ def local(ctx, debug=True):
         'faults': 0,
         'nodes': 4,
         'workers': 1,
-        'rate': 120000,
+        'rate': 80000,
         'tx_size': 512,
-        'duration': 20,
+        'duration': 60,
     }
     node_params = {
         'header_size': 1_000,  # bytes
         'max_header_delay': 200,  # ms
-        'gc_depth': 50,  # rounds
-        'sync_retry_delay': 10_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'gc_depth': 2000,  # rounds
+        'sync_retry_delay': 1000,  # ms
+        'sync_retry_nodes': 5,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
         # protocol structure
-        'solid_step_length': 2,
+        'solid_step_length': 3,
         'reference': 3, # 2f+1
-        'solid_step_number': 2
+        'solid_step_number': 1
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

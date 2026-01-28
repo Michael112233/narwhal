@@ -7,6 +7,7 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use log::debug;
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
@@ -57,6 +58,9 @@ pub struct CertificatesAggregator {
     cert_instance: Vec<Certificate>,
     used: HashSet<PublicKey>,
     has_quorum: bool,
+    /// Wait for several seconds after meeting the condition
+    quorum_reached_time: Option<Instant>,
+    wait_duration: Duration, 
 }
 
 impl CertificatesAggregator {
@@ -69,6 +73,8 @@ impl CertificatesAggregator {
             cert_instance: Vec::new(),
             used: HashSet::new(),
             has_quorum: false,
+            quorum_reached_time: None,
+            wait_duration: Duration::from_millis(50)
         }
     }
 
@@ -96,7 +102,7 @@ impl CertificatesAggregator {
             self.certificates.push(certificate.digest());
             if current_round % committee.solid_step_length() == 1 {
                 self.cert_instance.push(certificate.clone());
-                debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
+                // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
             }
             self.weight += committee.stake(&origin);
         } else if certificate.round() >= weak_start && certificate.round() < self.expected_round {
@@ -105,7 +111,7 @@ impl CertificatesAggregator {
             if current_round % committee.solid_step_length() == 1 {
                 self.weight += committee.stake(&origin);
                 self.cert_instance.push(certificate.clone());
-                debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
+                // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
             }
         }
         debug!(
@@ -140,12 +146,16 @@ impl CertificatesAggregator {
         // }
 
         if self.has_quorum {
+            if self.quorum_reached_time.is_none() {
+                self.quorum_reached_time = Some(Instant::now());
+            }
             let mut all = Vec::with_capacity(
                 self.certificates.len()
             );
             all.extend(self.certificates.iter().cloned());
-            // all.extend(self.weak_certificates.iter().cloned());
-            return Ok(Some(all));
+            if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
+                return Ok(Some(all));
+            }
         }
         Ok(None)
     }

@@ -18,7 +18,7 @@ pub struct Header {
     pub parents: BTreeSet<Digest>,
     pub id: Digest,
     pub signature: Signature,
-    /// Stores all vertices of the first round of the solid step which can be linked to current header.
+    /// Stores the vertices of the first round of the solid step which can be linked to
     pub solid_step_vertices: HashSet<Digest>,
 }
 

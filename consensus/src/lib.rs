@@ -355,13 +355,14 @@ impl Consensus {
                     };
                     
                     let vertex_str = if weak_parents.is_empty() {
-                        format!("({}){}", vertex_name, parent_str)
+                        format!("({}){} (solid_step_vertices: {})", vertex_name, parent_str, certificate.header.solid_step_vertices.len())
                     } else {
                         format!(
-                            "({}){} weak=[{}]",
+                            "({}){} weak=[{}] (solid_step_vertices: {})",
                             vertex_name,
                             parent_str,
-                            weak_parents.join(", ")
+                            weak_parents.join(", "),
+                            certificate.header.solid_step_vertices.len()
                         )
                     };
                     vertices.push(vertex_str);

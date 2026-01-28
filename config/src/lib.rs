@@ -139,6 +139,7 @@ pub struct Authority {
 
 #[derive(Clone, Deserialize)]
 pub struct Committee {
+    /// TODO: Reference parameter for the solid step.
     pub authorities: BTreeMap<PublicKey, Authority>,
     pub solid_step_length: usize,
     pub solid_step_number: usize,
@@ -192,6 +193,11 @@ impl Committee {
         // then (N + 2) / 3 = f + 1 + k/3 = f + 1
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         (total_votes + 2) / 3
+    }
+
+    pub fn max_threshold(&self) -> Stake {
+        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        2 * total_votes / 3 + 1
     }
 
     /// Returns the primary addresses of the target primary.
@@ -263,16 +269,6 @@ impl Committee {
     pub fn solid_wave_length(&self) -> u64 {
         self.solid_step_length as u64 * self.solid_step_number as u64
     }
-
-    // /// Returns true if the solid wave is completed.
-    // pub fn is_solid_wave_completed(&self, round: u64) -> bool {
-    //     round > 0 && round % self.solid_wave_length() == 0
-    // }
-
-    // /// Retures true if the solid step is completed .
-    // pub fn is_solid_step_completed(&self, round: u64) -> bool {
-    //     round > 0 && round % self.solid_step_length() == 0
-    // }
 
     /// Returns the length of the solid step.
     pub fn solid_step_length(&self) -> u64 {
