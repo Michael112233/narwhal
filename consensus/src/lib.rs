@@ -51,12 +51,12 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        // for (name, round) in &self.last_committed {
-        //     self.dag.retain(|r, authorities| {
-        //         authorities.retain(|n, _| n != name || r >= round);
-        //         !authorities.is_empty() && r + gc_depth >= last_committed_round
-        //     });
-        // }
+        for (name, round) in &self.last_committed {
+            self.dag.retain(|r, authorities| {
+                authorities.retain(|n, _| n != name || r >= round);
+                !authorities.is_empty() && r + gc_depth >= last_committed_round
+            });
+        }
     }
 }
 
@@ -124,7 +124,7 @@ impl Consensus {
 
             // We only elect leaders for even round numbers.
             debug!("r: {}, solid_step_length: {}", r, self.committee.solid_step_length());
-            if r % self.committee.solid_step_length() != 0 || r < self.committee.solid_wave_length() {
+            if r % self.committee.solid_step_length() != 0 || r < 2 * self.committee.solid_step_length() {
                 continue;
             }
 
@@ -136,13 +136,16 @@ impl Consensus {
             }
             let (leader_digest, leader) = match self.leader(leader_round, &state.dag) {
                 Some(x) => x,
-                None => continue,
+                None => {
+                    debug!("No leader in DAG for leader_round {} (commit requires leader for r={})", leader_round, r);
+                    continue;
+                }
             };
 
             // Check if the leader has f+1 support from its children (ie. round r-1).
             let stake: Stake = state
                 .dag
-                .get(&(r - 1))
+                .get(&(r - self.committee.solid_step_length() + 1))
                 .expect("We should have the whole history by now")
                 .values()
                 .filter(|(_, x)| x.header.parents.contains(&leader_digest))
@@ -155,6 +158,7 @@ impl Consensus {
                 debug!("Current stake is {}. Leader {:?} does not have enough support", stake, leader);
                 continue;
             }
+            
 
             // Get an ordered list of past leaders that are linked to the current leader.
             debug!("Leader {:?} has enough support", leader);
@@ -353,16 +357,39 @@ impl Consensus {
                     } else {
                         format!("[{}]", parents.join(", "))
                     };
+
+                    // Resolve each solid_step_vertex digest to [round, node_id] for explicit display.
+                    let mut solid_vertices = Vec::new();
+                    for digest in &certificate.header.solid_step_vertices {
+                        if let Some((r, author)) = self.find_certificate_in_dag(state, digest) {
+                            let n = author_to_node.get(&author).unwrap_or(&999);
+                            solid_vertices.push(format!("[{},{}]", r, n));
+                        } else {
+                            solid_vertices.push("[?,?]".to_string());
+                        }
+                    }
+                    let solid_str = if solid_vertices.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!(" solid=[{}]", solid_vertices.join(", "))
+                    };
                     
                     let vertex_str = if weak_parents.is_empty() {
-                        format!("({}){} (solid_step_vertices: {})", vertex_name, parent_str, certificate.header.solid_step_vertices.len())
+                        format!(
+                            "({}){} (solid_step_vertices: {}){}",
+                            vertex_name,
+                            parent_str,
+                            certificate.header.solid_step_vertices.len(),
+                            solid_str
+                        )
                     } else {
                         format!(
-                            "({}){} weak=[{}] (solid_step_vertices: {})",
+                            "({}){} weak=[{}] (solid_step_vertices: {}){}",
                             vertex_name,
                             parent_str,
                             weak_parents.join(", "),
-                            certificate.header.solid_step_vertices.len()
+                            certificate.header.solid_step_vertices.len(),
+                            solid_str
                         )
                     };
                     vertices.push(vertex_str);

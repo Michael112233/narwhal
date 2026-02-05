@@ -60,7 +60,9 @@ pub struct CertificatesAggregator {
     has_quorum: bool,
     /// Wait for several seconds after meeting the condition
     quorum_reached_time: Option<Instant>,
-    wait_duration: Duration, 
+    wait_duration: Duration,
+    /// Last computed union of solid_step_vertices (for debug / final_dag display).
+    last_union_set: Option<Vec<Digest>>,
 }
 
 impl CertificatesAggregator {
@@ -74,8 +76,15 @@ impl CertificatesAggregator {
             used: HashSet::new(),
             has_quorum: false,
             quorum_reached_time: None,
-            wait_duration: Duration::from_millis(50)
+            wait_duration: Duration::from_millis(20),
+            last_union_set: None,
         }
+    }
+
+    /// Returns the last computed union of solid_step_vertices (when advancing to a solid round).
+    /// Used by core to resolve digests to [round, node_id] for debug and final_dag.
+    pub fn last_solid_step_union_digests(&self) -> Option<&[Digest]> {
+        self.last_union_set.as_deref()
     }
 
     pub fn append(
@@ -100,7 +109,7 @@ impl CertificatesAggregator {
 
         if certificate.round() == self.expected_round {
             self.certificates.push(certificate.digest());
-            if current_round % committee.solid_step_length() == 1 {
+            if current_round % committee.solid_step_length() == 0 {
                 self.cert_instance.push(certificate.clone());
                 // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
             }
@@ -108,7 +117,7 @@ impl CertificatesAggregator {
         } else if certificate.round() >= weak_start && certificate.round() < self.expected_round {
             self.certificates.push(certificate.digest());
             self.weak_certificates.push(certificate.digest());
-            if current_round % committee.solid_step_length() == 1 {
+            if current_round % committee.solid_step_length() == 0 {
                 self.weight += committee.stake(&origin);
                 self.cert_instance.push(certificate.clone());
                 // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
@@ -121,18 +130,27 @@ impl CertificatesAggregator {
             current_round - 1
         );
 
-        if current_round % committee.solid_step_length() == 1 && current_round > 1 {
+        let threshold = committee.processing_threshold(current_round);
+        let is_solid_step = current_round % committee.solid_step_length() == 0 && current_round > 1;
+        debug!(
+            "Advance to round {}: require weight >= {}, solid_step={})",
+            current_round, threshold, is_solid_step
+        );
+        if is_solid_step {
             let mut union_set: HashSet<Digest> = HashSet::new();
             for certificate in &self.cert_instance {
                 let cert_first_round_parent: HashSet<Digest> = certificate.header.solid_step_vertices.iter().cloned().collect();
                 union_set.extend(cert_first_round_parent);
             }
-            // self.has_quorum = (union_set.len() >= committee.processing_threshold(self.expected_round) as usize);
-            self.has_quorum = (self.weight >= committee.processing_threshold(self.expected_round));
+            self.last_union_set = Some(union_set.iter().cloned().collect());
+            // self.has_quorum = (self.weight >= min_weight);
+            self.has_quorum = (union_set.len() >= committee.processing_threshold(current_round) as usize);
             debug!("Current round: {}, The number of the solid step vertices is {}", current_round, union_set.len());
         } else {
-            self.has_quorum = (self.weight >= committee.processing_threshold(self.expected_round));
-            debug!("Current round: {}, The weight is {}", current_round, self.weight);
+            self.last_union_set = None;
+            // self.has_quorum = (self.weight >= min_weight);
+            self.has_quorum = (self.weight >= committee.processing_threshold(current_round));
+            debug!("Current round: {}, The weight is {}, self_has_quorum: {}", current_round, self.weight, self.has_quorum);
         }
         // Modify processing condition
         // if self.expected_round % committee.solid_step_length() as u64 == 1 && self.expected_round > 1 {
@@ -153,9 +171,9 @@ impl CertificatesAggregator {
                 self.certificates.len()
             );
             all.extend(self.certificates.iter().cloned());
-            if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
-                return Ok(Some(all));
-            }
+            // if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
+            return Ok(Some(all));
+            // }
         }
         Ok(None)
     }

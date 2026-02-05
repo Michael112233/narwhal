@@ -143,6 +143,7 @@ pub struct Committee {
     pub authorities: BTreeMap<PublicKey, Authority>,
     pub solid_step_length: usize,
     pub solid_step_number: usize,
+    pub reference: usize,
 }
 
 impl Import for Committee {}
@@ -179,9 +180,9 @@ impl Committee {
     pub fn processing_threshold(&self, current_round: u64) -> Stake {
         // Apart from the quorum threshold, this is specially for processing headers.
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        if current_round % self.solid_step_length() as u64 == 1 && current_round > 1 {
-            // return 2 * total_votes / 3 + 1;
-            return (total_votes + 2) / 3;
+        if current_round % self.solid_step_length() as u64 == 0 && current_round > 1 {
+            return self.reference as Stake;
+            // return (total_votes + 2) / 3;
         } else {
             return (total_votes + 2) / 3;
         }

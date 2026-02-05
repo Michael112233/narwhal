@@ -183,8 +183,8 @@ impl Proposer {
                     }
 
                     // Advance to the next round.
-                    // self.round = round + 1;
-                    self.round = std::cmp::max(self.round, round) + 1;
+                    self.round = round + 1;
+                    // self.round = std::cmp::max(self.round, round) + 1;
                     debug!("Dag moved to round {}", self.round);
 
                     // Signal that we have enough parent certificates to propose a new header.
