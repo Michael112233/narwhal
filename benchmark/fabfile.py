@@ -16,7 +16,7 @@ def local(ctx, debug=True):
         'faults': 0,
         'nodes': 7,
         'workers': 1,
-        'rate': 40000,
+        'rate': 80000,
         'tx_size': 512,
         'duration': 20,
     }
@@ -29,9 +29,9 @@ def local(ctx, debug=True):
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
         # protocol structure
-        'solid_step_length': 4,
+        'solid_step_length': 3,
         'reference': 3,  # 2f+1
-        'solid_step_number': 1
+        'solid_step_number': 3
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
