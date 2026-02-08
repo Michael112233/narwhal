@@ -19,7 +19,7 @@ cd ../benchmark
 
 fab local
 
-## 参数说明
+## 参数说明 (Adversary folder)
 
 - `ATTACK_START_TIME_SEC`: 攻击开始的时间（秒），通常以实验启动为 0 秒的相对时间计算。
 - `ATTACK_DURATION_SEC`: 攻击持续时间（秒），攻击开始后持续的时长。
