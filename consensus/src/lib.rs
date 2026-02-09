@@ -130,7 +130,7 @@ impl Consensus {
 
             // Get the certificate's digest of the leader of round r-2. If we already ordered this leader,
             // there is nothing to do.
-            let leader_round = r - self.committee.solid_step_length();
+            let leader_round = r - self.committee.solid_wave_length();
             if leader_round <= state.last_committed_round {
                 continue;
             }
@@ -145,7 +145,7 @@ impl Consensus {
             // Check if the leader has f+1 support from its children (ie. round r-1).
             let stake: Stake = state
                 .dag
-                .get(&(r - self.committee.solid_step_length() + 1))
+                .get(&(r - self.committee.solid_wave_length() + 1))
                 .expect("We should have the whole history by now")
                 .values()
                 .filter(|(_, x)| x.header.parents.contains(&leader_digest))
