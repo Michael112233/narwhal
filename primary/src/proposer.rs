@@ -116,26 +116,6 @@ impl Proposer {
         );
         debug!("Created {:?}", header);
 
-        // Store the nodes which can be linked to in the first round
-        debug!("the number of the parents is {}", header.parents.len());
-        if self.round % self.solid_step_length == 1 {
-            let mut vertices: HashSet<Digest> = HashSet::new();
-            vertices.insert(header.id.clone());
-            header.store_solid_step_vertex(vertices);
-        } else {
-            let parents: Vec<_> = header.parents.iter().cloned().collect();
-            let mut merged = HashSet::new();
-
-            for parent in parents {
-                let bytes = self.store.notify_read(parent.to_vec()).await.unwrap();
-                let cert: Certificate = bincode::deserialize(&bytes).unwrap();
-                merged.extend(cert.header.solid_step_vertices);
-            }
-
-            header.store_solid_step_vertex(merged);
-        }
-        debug!("Current round: {}, The number of the solid step vertices is {}", self.round, header.solid_step_vertices.len());
-
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
             // NOTE: This log entry is used to compute performance.

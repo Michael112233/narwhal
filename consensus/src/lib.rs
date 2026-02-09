@@ -51,12 +51,12 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        for (name, round) in &self.last_committed {
-            self.dag.retain(|r, authorities| {
-                authorities.retain(|n, _| n != name || r >= round);
-                !authorities.is_empty() && r + gc_depth >= last_committed_round
-            });
-        }
+        // for (name, round) in &self.last_committed {
+        //     self.dag.retain(|r, authorities| {
+        //         authorities.retain(|n, _| n != name || r >= round);
+        //         !authorities.is_empty() && r + gc_depth >= last_committed_round
+        //     });
+        // }
     }
 }
 
@@ -230,7 +230,7 @@ impl Consensus {
         let mut leader = leader;
         for r in (state.last_committed_round + self.committee.solid_step_length()..leader.round())
             .rev()
-            .step_by(2)
+            .step_by(self.committee.solid_step_length)
         {
             // Get the certificate proposed by the previous leader.
             let (_, prev_leader) = match self.leader(r, &state.dag) {
@@ -358,38 +358,18 @@ impl Consensus {
                         format!("[{}]", parents.join(", "))
                     };
 
-                    // Resolve each solid_step_vertex digest to [round, node_id] for explicit display.
-                    let mut solid_vertices = Vec::new();
-                    for digest in &certificate.header.solid_step_vertices {
-                        if let Some((r, author)) = self.find_certificate_in_dag(state, digest) {
-                            let n = author_to_node.get(&author).unwrap_or(&999);
-                            solid_vertices.push(format!("[{},{}]", r, n));
-                        } else {
-                            solid_vertices.push("[?,?]".to_string());
-                        }
-                    }
-                    let solid_str = if solid_vertices.is_empty() {
-                        "".to_string()
-                    } else {
-                        format!(" solid=[{}]", solid_vertices.join(", "))
-                    };
-                    
                     let vertex_str = if weak_parents.is_empty() {
                         format!(
-                            "({}){} (solid_step_vertices: {}){}",
+                            "({}){}",
                             vertex_name,
-                            parent_str,
-                            certificate.header.solid_step_vertices.len(),
-                            solid_str
+                            parent_str
                         )
                     } else {
                         format!(
-                            "({}){} weak=[{}] (solid_step_vertices: {}){}",
+                            "({}){} weak=[{}]",
                             vertex_name,
                             parent_str,
-                            weak_parents.join(", "),
-                            certificate.header.solid_step_vertices.len(),
-                            solid_str
+                            weak_parents.join(", ")
                         )
                     };
                     vertices.push(vertex_str);

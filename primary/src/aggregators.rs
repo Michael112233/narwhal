@@ -81,12 +81,6 @@ impl CertificatesAggregator {
         }
     }
 
-    /// Returns the last computed union of solid_step_vertices (when advancing to a solid round).
-    /// Used by core to resolve digests to [round, node_id] for debug and final_dag.
-    pub fn last_solid_step_union_digests(&self) -> Option<&[Digest]> {
-        self.last_union_set.as_deref()
-    }
-
     pub fn append(
         &mut self,
         certificate: Certificate,
@@ -136,22 +130,9 @@ impl CertificatesAggregator {
             "Advance to round {}: require weight >= {}, solid_step={})",
             current_round, threshold, is_solid_step
         );
-        if is_solid_step {
-            let mut union_set: HashSet<Digest> = HashSet::new();
-            for certificate in &self.cert_instance {
-                let cert_first_round_parent: HashSet<Digest> = certificate.header.solid_step_vertices.iter().cloned().collect();
-                union_set.extend(cert_first_round_parent);
-            }
-            self.last_union_set = Some(union_set.iter().cloned().collect());
-            // self.has_quorum = (self.weight >= min_weight);
-            self.has_quorum = (union_set.len() >= committee.processing_threshold(current_round) as usize);
-            debug!("Current round: {}, The number of the solid step vertices is {}", current_round, union_set.len());
-        } else {
-            self.last_union_set = None;
-            // self.has_quorum = (self.weight >= min_weight);
-            self.has_quorum = (self.weight >= committee.processing_threshold(current_round));
-            debug!("Current round: {}, The weight is {}, self_has_quorum: {}", current_round, self.weight, self.has_quorum);
-        }
+        self.has_quorum = (self.weight >= committee.processing_threshold(current_round));
+        debug!("Current round: {}, The weight is {}, self_has_quorum: {}", current_round, self.weight, self.has_quorum);
+
         // Modify processing condition
         // if self.expected_round % committee.solid_step_length() as u64 == 1 && self.expected_round > 1 {
         //     if self.certificates..solid_step_vertices.len() >= committee.processing_threshold(self.expected_round as u64) {

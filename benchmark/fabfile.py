@@ -31,7 +31,7 @@ def local(ctx, debug=True):
         # protocol structure
         'solid_step_length': 3,
         'reference': 3,  # 2f+1
-        'solid_step_number': 3
+        'solid_step_number': 1
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

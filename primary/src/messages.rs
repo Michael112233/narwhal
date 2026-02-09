@@ -18,8 +18,6 @@ pub struct Header {
     pub parents: BTreeSet<Digest>,
     pub id: Digest,
     pub signature: Signature,
-    /// Stores the vertices of the first round of the solid step which can be linked to
-    pub solid_step_vertices: HashSet<Digest>,
 }
 
 impl Header {
@@ -37,7 +35,6 @@ impl Header {
             parents,
             id: Digest::default(),
             signature: Signature::default(),
-            solid_step_vertices: HashSet::new(),
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -67,10 +64,6 @@ impl Header {
         self.signature
             .verify(&self.id, &self.author)
             .map_err(DagError::from)
-    }
-
-    pub fn store_solid_step_vertex(&mut self, vertices: HashSet<Digest>) {
-        self.solid_step_vertices.extend(vertices);
     }
 }
 

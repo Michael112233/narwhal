@@ -180,12 +180,8 @@ impl Committee {
     pub fn processing_threshold(&self, current_round: u64) -> Stake {
         // Apart from the quorum threshold, this is specially for processing headers.
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        if current_round % self.solid_step_length() as u64 == 0 && current_round > 1 {
-            return self.reference as Stake;
-            // return (total_votes + 2) / 3;
-        } else {
-            return (total_votes + 2) / 3;
-        }
+        // if current_round % self.solid_step_length() as u64 == 0 && current_round > 1 {
+        return self.reference as Stake;
     }
 
     /// Returns the stake required to reach availability (f+1).

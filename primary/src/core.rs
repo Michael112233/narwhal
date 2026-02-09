@@ -178,7 +178,6 @@ impl Core {
         let is_solid_step = round % solid_step_length == 0 && round > 1;
 
         let mut stake = 0u64;
-        let mut solid_step_union = HashSet::new();
 
         for x in &parents {
             if x.round() + solid_step_length < header.round && x.round() > header.round {
@@ -190,23 +189,13 @@ impl Core {
                 DagError::MalformedHeader(header.id.clone())
             );
             stake += self.committee.stake(&x.origin()) as u64;
-            if is_solid_step {
-                solid_step_union.extend(x.header.solid_step_vertices.iter().cloned());
-            }
         }
 
         let threshold = self.committee.processing_threshold(round);
-        if is_solid_step {
-            ensure!(
-                solid_step_union.len() >= threshold as usize,
-                DagError::HeaderRequiresQuorum(header.id.clone())
-            );
-        } else {
-            ensure!(
-                stake >= threshold as u64,
-                DagError::HeaderRequiresQuorum(header.id.clone())
-            );
-        }
+        ensure!(
+            stake >= threshold as u64,
+            DagError::HeaderRequiresQuorum(header.id.clone())
+        );
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
@@ -350,53 +339,21 @@ impl Core {
             .or_insert_with(|| Box::new(CertificatesAggregator::new(target_round)))
             .append(certificate.clone(), &self.committee)?
         {
-            // For round 1, wait until we have headers from all nodes before moving to round 2.
-            if target_round % self.committee.solid_step_length() == 1 && parents.len() < self.committee.max_threshold() as usize {
-                debug!(
-                    "Round {} parents {} < {}; delaying move to round {}",
-                    target_round,
-                    parents.len(),
-                    self.committee.size(),
-                    target_round + 1
-                );
-                return Ok(());
-            }
+            // if target_round % self.committee.solid_step_length() == 1 {
+            //     debug!(
+            //         "Round {} parents {} < {}; delaying move to round {}",
+            //         target_round,
+            //         parents.len(),
+            //         self.committee.size(),
+            //         target_round + 1
+            //     );
+            //     return Ok(());
+            // }
             // Send it to the `Proposer`.
             self.tx_proposer
                 .send((parents, target_round))
                 .await
                 .expect("Failed to send certificate");
-        }
-
-        // Debug: resolve each solid_step_vertex in the merge to [round, node_id].
-        let current_round = target_round + 1;
-        if current_round % self.committee.solid_step_length() == 0 && current_round > 1 {
-            if let Some(agg) = self.certificates_aggregators.get(&target_round) {
-                if let Some(digests) = agg.last_solid_step_union_digests() {
-                    let mut vertices = Vec::with_capacity(digests.len());
-                    for digest in digests {
-                        if let Ok(Some(bytes)) = self.store.read(digest.to_vec()).await {
-                            if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                                let node_id = self.node_index(&cert.origin()).unwrap_or(999);
-                                vertices.push(format!("[{},{}]", cert.round(), node_id));
-                                debug!(
-                                    "solid_step_vertex {} -> [{},{}]",
-                                    digest,
-                                    cert.round(),
-                                    node_id
-                                );
-                            }
-                        }
-                    }
-                    if !vertices.is_empty() {
-                        debug!(
-                            "solid_step_union (round {}): {}",
-                            current_round,
-                            vertices.join(", ")
-                        );
-                    }
-                }
-            }
         }
 
         // Send it to the consensus layer.
