@@ -228,9 +228,9 @@ impl Consensus {
     fn order_leaders(&self, leader: &Certificate, state: &State) -> Vec<Certificate> {
         let mut to_commit = vec![leader.clone()];
         let mut leader = leader;
-        for r in (state.last_committed_round + self.committee.solid_step_length()..leader.round())
+        for r in (state.last_committed_round + self.committee.solid_wave_length()..leader.round())
             .rev()
-            .step_by(2)
+            .step_by(self.committee.solid_wave_length() as usize)
         {
             // Get the certificate proposed by the previous leader.
             let (_, prev_leader) = match self.leader(r, &state.dag) {
