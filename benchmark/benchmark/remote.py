@@ -36,7 +36,7 @@ class Bench:
         self.settings = self.manager.settings
         try:
             ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
-                self.manager.settings.key_path
+                self.settings.key_path
             )
             self.connect = ctx.connect_kwargs
         except (IOError, PasswordRequiredException, SSHException) as e:
@@ -192,7 +192,16 @@ class Bench:
             addresses = OrderedDict(
                 (x, y) for x, y in zip(names, hosts)
             )
-        committee = Committee(addresses, self.settings.base_port)
+        solid_step_length = node_parameters.json.get('solid_step_length', 2)
+        solid_step_number = node_parameters.json.get('solid_step_number', 1)
+        solid_reference = node_parameters.json.get('reference', 3)
+        committee = Committee(
+            addresses,
+            self.settings.base_port,
+            solid_step_length,
+            solid_step_number,
+            solid_reference,
+        )
         committee.print(PathMaker.committee_file())
 
         node_parameters.print(PathMaker.parameters_file())
