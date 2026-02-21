@@ -7,6 +7,8 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
+use std::collections::HashSet;
+use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -18,6 +20,8 @@ pub mod proposer_tests;
 pub struct Proposer {
     /// The public key of this primary.
     name: PublicKey,
+    /// Node index for logging.
+    node_id: Option<usize>,
     /// Service to sign headers.
     signature_service: SignatureService,
     /// The size of the headers' payload.
@@ -40,6 +44,10 @@ pub struct Proposer {
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
     payload_size: usize,
+    /// The solid step length.
+    solid_step_length: u64,
+    /// The persistent storage.
+    store: Store,
 }
 
 impl Proposer {
@@ -53,15 +61,22 @@ impl Proposer {
         rx_core: Receiver<(Vec<Digest>, Round)>,
         rx_workers: Receiver<(Digest, WorkerId)>,
         tx_core: Sender<Header>,
+        store: Store,
     ) {
+        let node_id = committee
+            .authorities
+            .keys()
+            .position(|authority| authority == &name);
         let genesis = Certificate::genesis(committee)
             .iter()
             .map(|x| x.digest())
             .collect();
+        let solid_step_length = committee.solid_step_length() as u64;
 
         tokio::spawn(async move {
             Self {
                 name,
+                node_id,
                 signature_service,
                 header_size,
                 max_header_delay,
@@ -72,6 +87,8 @@ impl Proposer {
                 last_parents: genesis,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
+                solid_step_length,
+                store,
             }
             .run()
             .await;
@@ -80,7 +97,7 @@ impl Proposer {
 
     async fn make_header(&mut self) {
         // Make a new header.
-        let header = Header::new(
+        let mut header = Header::new(
             self.name,
             self.round,
             self.digests.drain(..).collect(),
@@ -88,6 +105,15 @@ impl Proposer {
             &mut self.signature_service,
         )
         .await;
+        let origin_node = self
+            .node_id
+            .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
+        debug!(
+            "Created header {} (origin Node{}, round {})",
+            header.id,
+            origin_node,
+            header.round
+        );
         debug!("Created {:?}", header);
 
         #[cfg(feature = "benchmark")]
@@ -132,11 +158,13 @@ impl Proposer {
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
                     if round < self.round {
+                        debug!("Received header for round {} but we are at round {}", round, self.round);
                         continue;
                     }
 
                     // Advance to the next round.
                     self.round = round + 1;
+                    // self.round = std::cmp::max(self.round, round) + 1;
                     debug!("Dag moved to round {}", self.round);
 
                     // Signal that we have enough parent certificates to propose a new header.

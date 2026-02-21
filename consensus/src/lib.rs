@@ -51,12 +51,12 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        for (name, round) in &self.last_committed {
-            self.dag.retain(|r, authorities| {
-                authorities.retain(|n, _| n != name || r >= round);
-                !authorities.is_empty() && r + gc_depth >= last_committed_round
-            });
-        }
+        // for (name, round) in &self.last_committed {
+        //     self.dag.retain(|r, authorities| {
+        //         authorities.retain(|n, _| n != name || r >= round);
+        //         !authorities.is_empty() && r + gc_depth >= last_committed_round
+        //     });
+        // }
     }
 }
 
@@ -116,43 +116,49 @@ impl Consensus {
                 .or_insert_with(HashMap::new)
                 .insert(certificate.origin(), (certificate.digest(), certificate));
 
+            self.visualize_dag(&state, round);
+
             // Try to order the dag to commit. Start from the highest round for which we have at least
             // 2f+1 certificates. This is because we need them to reveal the common coin.
             let r = round - 1;
 
             // We only elect leaders for even round numbers.
-            if r % 2 != 0 || r < 4 {
+            debug!("r: {}, solid_step_length: {}", r, self.committee.solid_step_length());
+            if r % self.committee.solid_step_length() != 0 || r < 2 * self.committee.solid_step_length() {
                 continue;
             }
 
             // Get the certificate's digest of the leader of round r-2. If we already ordered this leader,
             // there is nothing to do.
-            let leader_round = r - 2;
+            let leader_round = r - self.committee.solid_step_length();
             if leader_round <= state.last_committed_round {
                 continue;
             }
             let (leader_digest, leader) = match self.leader(leader_round, &state.dag) {
                 Some(x) => x,
-                None => continue,
+                None => {
+                    debug!("No leader in DAG for leader_round {} (commit requires leader for r={})", leader_round, r);
+                    continue;
+                }
             };
 
             // Check if the leader has f+1 support from its children (ie. round r-1).
             let stake: Stake = state
                 .dag
-                .get(&(r - 1))
+                .get(&(r - self.committee.solid_step_length() + 1))
                 .expect("We should have the whole history by now")
                 .values()
                 .filter(|(_, x)| x.header.parents.contains(&leader_digest))
                 .map(|(_, x)| self.committee.stake(&x.origin()))
                 .sum();
-
             // If it is the case, we can commit the leader. But first, we need to recursively go back to
             // the last committed leader, and commit all preceding leaders in the right order. Committing
             // a leader block means committing all its dependencies.
             if stake < self.committee.validity_threshold() {
-                debug!("Leader {:?} does not have enough support", leader);
+                debug!("Current stake is {}. Leader {:?} does not have enough support", stake, leader);
                 continue;
             }
+            
 
             // Get an ordered list of past leaders that are linked to the current leader.
             debug!("Leader {:?} has enough support", leader);
@@ -222,9 +228,9 @@ impl Consensus {
     fn order_leaders(&self, leader: &Certificate, state: &State) -> Vec<Certificate> {
         let mut to_commit = vec![leader.clone()];
         let mut leader = leader;
-        for r in (state.last_committed_round + 2..leader.round())
+        for r in (state.last_committed_round + self.committee.solid_step_length()..leader.round())
             .rev()
-            .step_by(2)
+            .step_by(self.committee.solid_step_length)
         {
             // Get the certificate proposed by the previous leader.
             let (_, prev_leader) = match self.leader(r, &state.dag) {
@@ -298,5 +304,94 @@ impl Consensus {
         // Ordering the output by round is not really necessary but it makes the commit sequence prettier.
         ordered.sort_by_key(|x| x.round());
         ordered
+    }
+
+    fn visualize_dag(&self, state: &State, current_round: Round) {
+        // map from the authority to the node number
+        let mut author_to_node: HashMap<PublicKey, usize> = HashMap::new();
+        let mut node_counter = 0;
+        for (authority, _) in &self.committee.authorities {
+            author_to_node.insert(*authority, node_counter);
+            node_counter += 1;
+        }
+
+        // from current_round to round 1, reverse
+        for round in (1..=current_round).rev() {
+            if state.dag.contains_key(&round) {
+                let round_certs = state.dag.get(&round).unwrap();
+                let mut round_output = format!("Round {}:", round);
+                let mut vertices = Vec::new();
+                
+                let mut sorted_certs: Vec<_> = round_certs.iter().collect();
+                sorted_certs.sort_by_key(|(author, _)| *author);
+
+                for (author, (cert_digest, certificate)) in sorted_certs {
+                    let node_id = author_to_node.get(author).unwrap_or(&999);
+                    let vertex_name = format!("Vertex{}", node_id);
+                    
+                    // find the parent nodes
+                    let mut parents = Vec::new();
+                    let mut weak_parents = Vec::new();
+                    for parent_digest in &certificate.header.parents {
+                        // find the parent certificate in the dag
+                        if let Some((parent_round, parent_author)) = self.find_certificate_in_dag(state, parent_digest) {
+                            let parent_node_id = author_to_node.get(&parent_author).unwrap_or(&999);
+                            let is_weak = parent_round + 1 != round;
+                            if is_weak {
+                                let weak_entry = format!("[w{},{}]", parent_round, parent_node_id);
+                                parents.push(weak_entry.clone());
+                                weak_parents.push(weak_entry);
+                            } else {
+                                parents.push(format!("[{},{}]", parent_round, parent_node_id));
+                            }
+                        } else {
+                            // if the block is genesis, do not need to output
+                            if round != 1 {
+                                parents.push("[?,?]".to_string());
+                            }
+                        }
+                    }
+                    
+                    let parent_str = if parents.is_empty() {
+                        "[]".to_string()
+                    } else {
+                        format!("[{}]", parents.join(", "))
+                    };
+
+                    let vertex_str = if weak_parents.is_empty() {
+                        format!(
+                            "({}){}",
+                            vertex_name,
+                            parent_str
+                        )
+                    } else {
+                        format!(
+                            "({}){} weak=[{}]",
+                            vertex_name,
+                            parent_str,
+                            weak_parents.join(", ")
+                        )
+                    };
+                    vertices.push(vertex_str);
+                }
+                
+                if !vertices.is_empty() {
+                    round_output.push_str(&format!(" {} ", vertices.join(" --- ")));
+                    info!("{}", round_output);
+                }
+            }
+        }
+    }
+
+    fn find_certificate_in_dag(&self, state: &State, digest: &Digest) -> Option<(Round, PublicKey)> {
+        for (round, round_certs) in &state.dag {
+            for (author, (cert_digest, certificate)) in round_certs {
+                // check if the digest is the header.id or certificate.digest()
+                if cert_digest == digest || &certificate.header.id == digest {
+                    return Some((*round, *author));
+                }
+            }
+        }
+        None
     }
 }
