@@ -46,7 +46,7 @@ def local(ctx, debug=True):
         'reference': 3,
         'solid_step_number': 1,
         's': 1.01,
-        'v': 10,
+        'v': 1,
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -222,16 +222,19 @@ def cloudlab_install(ctx):
 
 
 @task
-def cloudlab_remote(ctx, debug=False):
+def cloudlab_remote(ctx, debug=False, solid_step_length=3, reference=2):
     ''' Run benchmarks on CloudLab '''
+    solid_step_length = int(solid_step_length)
+    reference = int(reference)
     bench_params = {
         'faults': 0,
         'nodes': [4],
         'workers': 1,
         'collocate': True,
-        'rate': [40_000],
+        'rate_type': 'imbalanced',
+        'rate': [40000],
         'tx_size': 512,
-        'duration': 40,
+        'duration': 120,
         'runs': 1,
     }
     node_params = {
@@ -244,7 +247,9 @@ def cloudlab_remote(ctx, debug=False):
         'max_batch_delay': 200,  # ms
         'solid_step_length': 2,
         'solid_step_number': 1,
-        'reference': 3,
+        'reference': 2,
+        's': 1.01,
+        'v': 1,
     }
     try:
         CloudLabBench(ctx).run(bench_params, node_params, debug)

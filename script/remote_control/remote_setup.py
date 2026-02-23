@@ -222,65 +222,34 @@ class RemoteServerManager:
         """
         results = []
         
-        # Create tasks: (server, command) pairs
-        tasks = []
-        for server in self.servers:
-            for cmd in commands:
-                tasks.append((server, cmd))
-        
-        print(f"\n  Executing {len(tasks)} tasks in parallel (each with separate connection)...")
-        
-        # Execute all tasks in parallel using ThreadPoolExecutor
-        # Each task creates its own Connection (socket)
-        def execute_single_task(task):
-            server, cmd = task
+        # Run each server's commands sequentially, but run different servers in parallel.
+        # This preserves command order per host while still speeding up multi-host setup.
+        total_tasks = len(self.servers) * len(commands)
+        print(f"\n  Executing {total_tasks} tasks in parallel across servers (sequential per server)...")
+
+        def execute_server_commands(server):
             hostname = server['hostname']
-            username = server.get('username', 'ubuntu')
-            port = server.get('port', 22)
-            connect_timeout = server.get('connect_timeout', 30)
-            
-            try:
-                # Create a new connection for each task (separate socket)
-                conn = Connection(
-                    hostname,
-                    user=username,
-                    port=port,
-                    connect_kwargs=self.connect_kwargs,
-                    connect_timeout=connect_timeout
-                )
-                
-                result = conn.run(cmd, hide=hide_output, warn=True)
-                conn.close()  # Close the connection after use
-                
-                return {
-                    'success': result.ok,
-                    'hostname': hostname,
-                    'command': cmd,
-                    'stdout': result.stdout,
-                    'stderr': result.stderr,
-                    'return_code': result.return_code
-                }
-            except Exception as e:
-                return {
-                    'success': False,
-                    'hostname': hostname,
-                    'command': cmd,
-                    'error': str(e)
-                }
-        
-        # Execute all tasks in parallel
-        with ThreadPoolExecutor(max_workers=min(len(tasks), 20)) as executor:
-            future_to_task = {executor.submit(execute_single_task, task): task for task in tasks}
-            
+            server_results = []
+            for cmd in commands:
+                result = self.execute_command(server, cmd, hide_output=hide_output)
+                server_results.append(result)
+            return hostname, server_results
+
+        with ThreadPoolExecutor(max_workers=min(len(self.servers), 20)) as executor:
+            future_to_server = {
+                executor.submit(execute_server_commands, server): server
+                for server in self.servers
+            }
+
             completed = 0
-            for future in as_completed(future_to_task):
-                completed += 1
-                result = future.result()
-                results.append(result)
-                
-                if not hide_output:
-                    status = "✓" if result['success'] else "✗"
-                    print(f"  [{completed}/{len(tasks)}] {status} {result['hostname']}: {result['command'][:50]}...")
+            for future in as_completed(future_to_server):
+                hostname, server_results = future.result()
+                for result in server_results:
+                    completed += 1
+                    results.append(result)
+                    if not hide_output:
+                        status = "✓" if result['success'] else "✗"
+                        print(f"  [{completed}/{total_tasks}] {status} {hostname}: {result['command'][:50]}...")
         
         return results
     

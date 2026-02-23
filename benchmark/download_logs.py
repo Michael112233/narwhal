@@ -80,7 +80,7 @@ def check_file_exists(conn, remote_path):
     except:
         return False
 
-def safe_get_file(conn, remote_path, local_path, timeout=30):
+def safe_get_file(conn, remote_path, local_path, timeout=300):
     """Download file with timeout, existence check, and progress percentage"""
     # First check if file exists
     Print.info(f'    Checking if file exists...')
