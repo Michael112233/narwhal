@@ -47,6 +47,16 @@ class LogParser:
         proposals, commits, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        missing_proposals = set(self.commits) - set(self.proposals)
+        if missing_proposals:
+            Print.warn(
+                f'Skipping {len(missing_proposals):,} commit(s) without matching proposal '
+                '(likely due to incomplete primary logs)'
+            )
+            self.commits = {
+                digest: ts for digest, ts in self.commits.items()
+                if digest in self.proposals
+            }
 
         # Parse the workers logs.
         try:
@@ -153,7 +163,7 @@ class LogParser:
         return datetime.timestamp(x)
 
     def _consensus_throughput(self):
-        if not self.commits:
+        if not self.commits or not self.proposals:
             return 0, 0, 0
         start, end = min(self.proposals.values()), max(self.commits.values())
         duration = end - start
@@ -163,7 +173,7 @@ class LogParser:
         return tps, bps, duration
 
     def _consensus_latency(self):
-        latency = [c - self.proposals[d] for d, c in self.commits.items()]
+        latency = [c - self.proposals[d] for d, c in self.commits.items() if d in self.proposals]
         return mean(latency) if latency else 0
 
     def _end_to_end_throughput(self):

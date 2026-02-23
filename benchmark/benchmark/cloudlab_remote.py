@@ -23,6 +23,7 @@ from benchmark.utils import BenchError, Print, PathMaker
 from benchmark.commands import CommandMaker
 from benchmark.logs import LogParser, ParseError
 from benchmark.cloudlab_instance import CloudLabInstanceManager
+from benchmark.imbalanced_rate import ZipfAllocator
 
 
 class FabricError(Exception):
@@ -182,18 +183,25 @@ class CloudLabBench:
         host_info = self.manager.get_host_info()
         cmd = [
             'sudo apt-get update',
-            'sudo apt-get -y upgrade',
-            'sudo apt-get -y autoremove',
-            'sudo apt-get -y install build-essential',
-            'sudo apt-get -y install cmake',
-            'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
+            'sudo apt-get install -y tmux',
+            'curl https://sh.rustup.rs -sSf | sh -s -- -y',
+            'sudo apt-get install -y libclang-dev',
+            'sudo apt-get update',
+            'sudo apt-get install -y iproute2',
+            'sudo apt-get install -y python3-pip',
+            # Keep baseline build deps for benchmark compilation.
+            'sudo apt-get install -y build-essential cmake clang',
             'source $HOME/.cargo/env',
             'rustup default stable',
+            'rustup component add cargo rustc rust-std',
+            # Some nodes have a broken rustup cargo proxy; fall back to system cargo.
+            'rustup run stable cargo --version || sudo apt-get install -y cargo',
+            'rustc --version',
             # Add cargo to PATH permanently
             'echo "export PATH=\\$HOME/.cargo/bin:\\$PATH" >> $HOME/.bashrc',
             'echo "export PATH=\\$HOME/.cargo/bin:\\$PATH" >> $HOME/.profile',
-            'sudo apt-get install -y clang',
-            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))'
+            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))',
+            f'cd {self.settings.repo_name}/benchmark && pip3 install -r requirements.txt'
         ]
         
         try:
@@ -663,10 +671,16 @@ class CloudLabBench:
             'git pull',
             # Source cargo environment before building
             'source $HOME/.cargo/env || export PATH=$HOME/.cargo/bin:$PATH',
-            'cargo build --release --features benchmark',
-            # Create symlinks so ./node and ./benchmark_client work
-            # Remove any existing node directory or file first (node is also a crate directory)
-            f'rm -rf node benchmark_client 2>/dev/null ; {CommandMaker.alias_binaries("./target/release/")}'
+            'rustup default stable || true',
+            'rustup component add cargo rustc rust-std || true',
+            'if rustup run stable cargo --version >/dev/null 2>&1; then '
+            'rustup run stable cargo build --release --features benchmark; '
+            'else cargo build --release --features benchmark; fi',
+            # Keep the node source directory intact; only ensure benchmark_client launcher exists.
+            'rm -f benchmark_client 2>/dev/null || true',
+            'test -f ./target/release/benchmark_client && ln -sf ./target/release/benchmark_client ./benchmark_client || true',
+            'test -x ./target/release/node',
+            'test -x ./target/release/benchmark_client'
         ]
         
         # Modify attack.rs AFTER updating the code (so the file exists)
@@ -818,17 +832,18 @@ class CloudLabBench:
                 # Generate keys on remote node (code should already be compiled from _update)
                 for i, key_file in enumerate(key_files):
                     Print.info(f'Generating key {i+1}/{len(key_files)}: {key_file}')
-                    # Use absolute path for key file on remote
+                    # Generate into the repo root after `cd {repo_name}`.
+                    remote_key_filename = key_file
                     remote_key_path = f'{repo_name}/{key_file}'
                     # Generate key using the compiled node binary
                     # The binary should exist after _update compiles the code
-                    cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_path}'
+                    cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_filename}'
                     Print.info(f'Running command: {cmd}')
                     result = conn.run(cmd, hide=True, warn=True)
                     if not result.ok:
                         # Try with target/release/node if ./node doesn't exist
                         Print.info(f'First attempt failed, trying with target/release/node...')
-                        cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_path}'
+                        cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_filename}'
                         result = conn.run(cmd, hide=True)
                     
                     if not result.ok:
@@ -872,12 +887,12 @@ class CloudLabBench:
                     
             except Exception as e:
                 error_msg = f'Failed to generate keys on remote nodes. Please ensure the code is compiled on remote nodes. Error: {e}'
-                Print.error(error_msg)
-                Print.error(f'Keys generated so far: {len(keys)}/{len(key_files)}')
-                Print.error(f'Key files expected: {key_files}')
+                Print.warn(error_msg)
+                Print.warn(f'Keys generated so far: {len(keys)}/{len(key_files)}')
+                Print.warn(f'Key files expected: {key_files}')
                 if hasattr(e, '__traceback__'):
                     import traceback
-                    Print.error('Full traceback:')
+                    Print.warn('Full traceback:')
                     traceback.print_exc()
                 raise BenchError(error_msg, e)
         
@@ -1052,11 +1067,36 @@ class CloudLabBench:
         Print.info(f'Starting {name} on {hostname}...')
         c = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
         try:
-            # First verify the repo directory and binaries exist
-            test_cmd = f'cd {repo_name} && test -f node && test -f benchmark_client && echo "Binaries found" || echo "Binaries missing"'
-            test_result = c.run(test_cmd, hide=True)
+            # Ensure repo binaries exist on this host. Some hosts only have target/release/*
+            # and some may need a one-time build; normalize by creating root-level symlinks.
+            test_cmd = (
+                f'cd {repo_name} && '
+                '((test -x ./target/release/node) && '
+                '(test -x ./benchmark_client || test -x ./target/release/benchmark_client) && '
+                'echo "Binaries found") || echo "Binaries missing"'
+            )
+            test_result = c.run(test_cmd, hide=True, warn=True)
             if 'Binaries missing' in test_result.stdout:
-                Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}')
+                Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}; attempting build...')
+                ensure_binaries_cmd = f'''cd {repo_name} && (
+if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
+if [ ! -f ./target/release/node ] || [ ! -f ./target/release/benchmark_client ]; then
+    if rustup run stable cargo --version >/dev/null 2>&1; then
+        rustup run stable cargo build --release --bin node --bin benchmark_client
+    else
+        cargo build --release --bin node --bin benchmark_client
+    fi
+fi
+[ -f ./target/release/benchmark_client ] && [ ! -f ./benchmark_client ] && ln -sf ./target/release/benchmark_client ./benchmark_client || true
+test -x ./target/release/node && (test -x ./benchmark_client || test -x ./target/release/benchmark_client)
+)'''
+                ensure_result = c.run(ensure_binaries_cmd, hide=True, warn=True)
+                if not ensure_result.ok:
+                    error_msg = (
+                        f'Binaries are missing on {hostname} and automatic build failed. '
+                        'Please run cloudlab-install to compile binaries on all nodes.'
+                    )
+                    raise BenchError(error_msg, RuntimeError((ensure_result.stderr or ensure_result.stdout).strip()))
             
             # Ensure log directory exists
             from os.path import dirname
@@ -1071,6 +1111,14 @@ class CloudLabBench:
             store_match = re.search(r'--store\s+(\S+)', command)
             store_path = store_match.group(1) if store_match else None
             
+            # Resolve command binary path on remote host. In repo root, "node" is a directory,
+            # so "./node" may be invalid; prefer target/release binaries.
+            resolved_command = command
+            if command.startswith('./node '):
+                resolved_command = command.replace('./node ', '${NODE_BIN} ', 1)
+            elif command.startswith('./benchmark_client '):
+                resolved_command = command.replace('./benchmark_client ', '${CLIENT_BIN} ', 1)
+
             # Write script with better error handling
             # Use relative path after cd to repo directory
             # log_file is already relative (e.g., "logs/client-0-0.log")
@@ -1090,16 +1138,24 @@ mkdir -p $(dirname {log_file}) 2>/dev/null || true
 # Cleanup database directory and lock files before starting
 {cleanup_store}
 
-# Check if binary exists (for client/worker/primary)
+# Resolve runtime binaries (for client/worker/primary)
 if [[ "{name}" == client-* ]]; then
-    if [ ! -f "./benchmark_client" ] && [ ! -f "./target/release/benchmark_client" ]; then
+    if [ -x "./benchmark_client" ]; then
+        CLIENT_BIN="./benchmark_client"
+    elif [ -x "./target/release/benchmark_client" ]; then
+        CLIENT_BIN="./target/release/benchmark_client"
+    else
         echo "ERROR: benchmark_client not found" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
         echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
         exit 1
     fi
 elif [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
-    if [ ! -f "./node" ] && [ ! -f "./target/release/node" ]; then
+    if [ -x "./target/release/node" ]; then
+        NODE_BIN="./target/release/node"
+    elif [ -x "./node" ] && [ ! -d "./node" ]; then
+        NODE_BIN="./node"
+    else
         echo "ERROR: node binary not found" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
         echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
@@ -1114,24 +1170,24 @@ exec > {log_file} 2>&1
 
 # Execute the command
 # Use exec to replace shell with the actual process
-exec {command}
+exec {resolved_command}
 SCRIPTEOF'''
             script_write_result = c.run(script_cmd, hide=True, warn=True)
             if not script_write_result.ok:
-                Print.error(f'  ✗ Failed to create script: {script_write_result.stderr}')
+                Print.warn(f'  ✗ Failed to create script: {script_write_result.stderr}')
                 error_msg = f'Failed to create script for {name} on {hostname}'
                 raise BenchError(error_msg, RuntimeError(error_msg))
             
             chmod_result = c.run(f'chmod +x {script_path}', hide=True, warn=True)
             if not chmod_result.ok:
-                Print.error(f'  ✗ Failed to make script executable: {chmod_result.stderr}')
+                Print.warn(f'  ✗ Failed to make script executable: {chmod_result.stderr}')
                 error_msg = f'Failed to make script executable for {name} on {hostname}'
                 raise BenchError(error_msg, RuntimeError(error_msg))
             
             # Verify script was created correctly
             verify_script = c.run(f'test -f {script_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
             if 'FAIL' in verify_script.stdout:
-                Print.error(f'  ✗ Script file {script_path} was not created')
+                Print.warn(f'  ✗ Script file {script_path} was not created')
                 error_msg = f'Script file not created for {name} on {hostname}'
                 raise BenchError(error_msg, FileNotFoundError(error_msg))
             
@@ -1142,13 +1198,13 @@ SCRIPTEOF'''
             nohup_result = c.run(nohup_cmd, hide=True, warn=True)
             
             if not nohup_result.ok:
-                Print.error(f'  ✗ Failed to start {name}: {nohup_result.stderr}')
+                Print.warn(f'  ✗ Failed to start {name}: {nohup_result.stderr}')
                 error_msg = f'Failed to start {name} on {hostname}'
                 raise BenchError(error_msg, RuntimeError(error_msg))
             
             pid = nohup_result.stdout.strip()
             if not pid or not pid.isdigit():
-                Print.error(f'  ✗ Failed to get PID for {name}')
+                Print.warn(f'  ✗ Failed to get PID for {name}')
                 error_msg = f'Failed to start {name} on {hostname}'
                 raise BenchError(error_msg, ValueError(error_msg))
             
@@ -1197,8 +1253,9 @@ SCRIPTEOF'''
                 Print.info(f'  ✓ Process {pid} is running')
                 
         except Exception as e:
-            Print.error(f'  ✗ Failed to start {name} on {hostname}: {e}')
-            raise
+            if isinstance(e, BenchError):
+                raise
+            raise BenchError(f'Failed to start {name} on {hostname}', e)
     
     def _get_host_by_address(self, address, selected_hosts):
         """Get host info by extracting IP from address"""
@@ -1238,9 +1295,8 @@ SCRIPTEOF'''
         
         return None
     
-    def _run_single(self, rate, committee, bench_parameters, selected_hosts, debug=False):
+    def _run_single(self, rate, committee, bench_parameters, node_parameters, selected_hosts, debug=False):
         """Run a single benchmark iteration (CloudLab), mirroring logic from Bench._run_single"""
-        from math import ceil
         from time import sleep
 
         faults = bench_parameters.faults
@@ -1258,7 +1314,30 @@ SCRIPTEOF'''
         # 2. Run the clients first (they will wait for the nodes to be ready)
         #    This mirrors benchmark/benchmark/remote.py::_run_single
         Print.info('Booting clients...')
-        rate_share = ceil(rate / committee.workers())
+        workers_total = committee.workers()
+        if bench_parameters.rate_type == 'balanced':
+            rate_share = ceil(rate / workers_total)
+            worker_rates = [rate_share] * workers_total
+        elif bench_parameters.rate_type in ('imbalanced', 'imbalance'):
+            s = node_parameters.json.get('s')
+            v = node_parameters.json.get('v')
+            if s is None or v is None:
+                raise BenchError(
+                    'rate_type=imbalanced requires node parameters "s" and "v"',
+                    ValueError('Missing Zipf parameters s/v')
+                )
+            try:
+                worker_rates = ZipfAllocator(rate, workers_total, float(s), float(v)).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate imbalanced client rates', e)
+            Print.info(f'Client rates (Zipf, s={s}, v={v}): {worker_rates}')
+        else:
+            raise BenchError(
+                f'Unknown rate_type "{bench_parameters.rate_type}" (expected "balanced" or "imbalanced")',
+                ValueError('Invalid rate_type')
+            )
+
+        worker_index = 0
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
                 host_info = self._get_host_by_address(address, selected_hosts)
@@ -1266,14 +1345,16 @@ SCRIPTEOF'''
                     Print.warn(f'Could not find host for address {address}')
                     continue
 
+                client_rate = worker_rates[min(worker_index, len(worker_rates) - 1)]
                 cmd = CommandMaker.run_client(
                     address,
                     bench_parameters.tx_size,
-                    rate_share,
+                    client_rate,
                     [x for y in workers_addresses for _, x in y]
                 )
                 log_file = PathMaker.client_log_file(i, id)
                 self._background_run(host_info, cmd, log_file)
+                worker_index += 1
 
         # 3. Run the primaries (except the faulty ones) – same order as Bench._run_single
         Print.info('Booting primaries...')
@@ -1410,7 +1491,7 @@ SCRIPTEOF'''
                         try:
                             # Run the actual benchmark
                             self._run_single(
-                                rate, committee_copy, bench_parameters, selected_hosts, debug
+                                rate, committee_copy, bench_parameters, node_parameters, selected_hosts, debug
                             )
                             
                             # Download and parse logs
