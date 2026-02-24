@@ -61,38 +61,46 @@ def new_zipf(r: object, s: float, v: float, imax: int) -> Optional[Zipf]:
 
 
 class ZipfAllocator:
-    def __init__(self, total_tps: int, nodes: int, s: float, v: float) -> None:
+    def __init__(self, total_tps: int, nodes: int, s: float) -> None:
         """
-        :param total_tps: total TPS (total load to be allocated)
-        :param nodes: number of nodes
-        :param s: Zipf distribution parameter s (> 1.0)
-        :param v: Zipf distribution parameter v (>= 1)
+        :param total_tps: 总 TPS (例如 60000)
+        :param nodes: 节点数 (例如 10)
+        :param s: 对应 YCSB 中的 ZIPFIAN_CONSTANT (theta)，通常为 0.99
         """
-        if total_tps <= 0:
-            raise ValueError("total_tps must be > 0")
-        if nodes <= 0:
-            raise ValueError("nodes must be > 0")
-        if s <= 1.0:
-            raise ValueError("s must be > 1.0")
-        if v < 1:
-            raise ValueError("v must be >= 1")
-
+        if total_tps <= 0 or nodes <= 0:
+            raise ValueError("total_tps and nodes must be > 0")
+        
         self.total_tps = total_tps
         self.nodes = nodes
-        self.s = s
-        self.v = v
+        # 在 YCSB 源码中，theta 即 zipfianconstant
+        self.theta = s
 
     def allocate(self) -> list[int]:
-        weights = [(self.v + k) ** (-self.s) for k in range(1, self.nodes + 1)]
-        total_w = sum(weights)
-        raw = [self.total_tps * w / total_w for w in weights]
-        alloc = [int(x) for x in raw]
+        """
+        按照 YCSB ZipfianGenerator 的概率密度逻辑分配 TPS。
+        结果将确保 60000 TPS 严格分配到各节点，且分布曲线与 Java 源码一致。
+        """
+        # YCSB 的分布逻辑：第 i 个元素的频率与 (i+1)^-theta 成正比
+        # 这里我们将每个 node 视为一个 bucket
+        weights = []
+        for i in range(1, self.nodes + 1):
+            weights.append(1.0 / math.pow(i, self.theta))
+        
+        sum_weights = sum(weights)
+        
+        # 计算每个节点应得的理论 TPS (浮点数)
+        raw_rates = [(self.total_tps * w / sum_weights) for w in weights]
+        
+        # 转换为整数并处理舍入误差，确保总和绝对等于 total_tps
+        alloc = [int(r) for r in raw_rates]
         remainder = self.total_tps - sum(alloc)
-
+        
         if remainder > 0:
-            frac = [x - int(x) for x in raw]
-            order = sorted(range(self.nodes), key=lambda i: frac[i], reverse=True)
+            # 按照小数部分从大到小排序，补齐缺失的 TPS (最大余数法)
+            fractions = [(r - int(r)) for r in raw_rates]
+            # 这里的索引顺序决定了补齐的优先级
+            adjust_indices = sorted(range(self.nodes), key=lambda k: fractions[k], reverse=True)
             for i in range(remainder):
-                alloc[order[i]] += 1
-
+                alloc[adjust_indices[i]] += 1
+                
         return alloc
