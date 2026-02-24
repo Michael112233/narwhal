@@ -4,6 +4,7 @@ from math import ceil
 from os.path import basename, splitext
 from time import sleep
 
+from benchmark.imbalanced_rate import ZipfAllocator
 from benchmark.commands import CommandMaker
 from benchmark.config import Key, LocalCommittee, NodeParameters, BenchParameters, ConfigError
 from benchmark.logs import LogParser, ParseError
@@ -17,6 +18,8 @@ class LocalBench:
         try:
             self.bench_parameters = BenchParameters(bench_parameters_dict)
             self.node_parameters = NodeParameters(node_parameters_dict)
+            if bench_parameters_dict['rate_type'] == 'imbalanced':
+                self.s = node_parameters_dict['s']
             self.solid_step_length = node_parameters_dict['solid_step_length']
             self.solid_step_number = node_parameters_dict['solid_step_number']
             self.solid_reference = node_parameters_dict['reference']
@@ -47,7 +50,7 @@ class LocalBench:
 
         try:
             Print.info('Setting up testbed...')
-            nodes, rate = self.nodes[0], self.rate[0]
+            nodes, rate, rate_type = self.nodes[0], self.rate[0], self.rate_type
 
             # Cleanup all files.
             cmd = f'{CommandMaker.clean_logs()} ; {CommandMaker.cleanup()}'
@@ -78,17 +81,34 @@ class LocalBench:
 
             # Run the clients (they will wait for the nodes to be ready).
             workers_addresses = committee.workers_addresses(self.faults)
-            rate_share = ceil(rate / committee.workers())
-            for i, addresses in enumerate(workers_addresses):
-                for (id, address) in addresses:
-                    cmd = CommandMaker.run_client(
-                        address,
-                        self.tx_size,
-                        rate_share,
-                        [x for y in workers_addresses for _, x in y]
-                    )
-                    log_file = PathMaker.client_log_file(i, id)
-                    self._background_run(cmd, log_file)
+            if rate_type == 'balanced':
+                rate_share = ceil(rate / committee.workers())
+                for i, addresses in enumerate(workers_addresses):
+                    for (id, address) in addresses:
+                        cmd = CommandMaker.run_client(
+                            address,
+                            self.tx_size,
+                            rate_share,
+                            [x for y in workers_addresses for _, x in y]
+                        )
+                        log_file = PathMaker.client_log_file(i, id)
+                        self._background_run(cmd, log_file)
+            else:
+                # generate a list of rate with zipf
+                zipf_allocator = ZipfAllocator(rate, committee.workers(), self.s)
+                rates = zipf_allocator.allocate()
+                print(rates)
+                # run the clients with the generated rate
+                for i, addresses in enumerate(workers_addresses):
+                    for (id, address) in addresses:
+                        cmd = CommandMaker.run_client(
+                            address,
+                            self.tx_size,
+                            rates[i],
+                            [x for y in workers_addresses for _, x in y]
+                        )
+                        log_file = PathMaker.client_log_file(i, id)
+                        self._background_run(cmd, log_file)
 
             # Run the primaries (except the faulty ones).
             for i, address in enumerate(committee.primary_addresses(self.faults)):

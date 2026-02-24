@@ -208,7 +208,8 @@ class BenchParameters:
                 raise ConfigError('Missing input rate')
             self.rate = [int(x) for x in rate]
 
-            
+            self.rate_type = str(json['rate_type']) if 'rate_type' in json else 'balanced'
+
             self.workers = int(json['workers'])
 
             if 'collocate' in json:

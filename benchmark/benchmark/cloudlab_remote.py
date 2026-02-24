@@ -678,11 +678,22 @@ class CloudLabBench:
             'rm -rf "$HOME/.rustup" "$HOME/.cargo"; '
             'curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable; '
             'fi',
-            # Source cargo environment before building
-            'source $HOME/.cargo/env || export PATH=$HOME/.cargo/bin:$PATH',
-            'rustup toolchain install stable || true',
-            'rustup default stable || true',
+            # Ensure rustup/cargo are on PATH in the current shell (no subshell).
+            'if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi; export PATH="$HOME/.cargo/bin:$PATH"',
+            'command -v rustup >/dev/null 2>&1 || (echo "rustup not found after setup" && exit 1)',
+            'command -v cargo >/dev/null 2>&1 || (echo "cargo not found after setup" && exit 1)',
+            'rustup toolchain install stable',
+            'rustup default stable',
             'rustup component add cargo rustc rust-std || true',
+            # Build prerequisites and diagnostics for common cc-rs failures.
+            'if ! command -v cc >/dev/null 2>&1; then '
+            'echo "C compiler not found; installing build-essential"; '
+            'sudo apt-get update && sudo apt-get install -y build-essential; '
+            'fi',
+            'echo "Pre-build diagnostics:"',
+            'df -h . || true',
+            'df -i . || true',
+            'cc --version || true',
             'cargo build --release --features benchmark',
             # Keep the node source directory intact; only ensure benchmark_client launcher exists.
             'rm -f benchmark_client 2>/dev/null || true',
