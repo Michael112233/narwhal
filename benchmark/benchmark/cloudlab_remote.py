@@ -669,13 +669,21 @@ class CloudLabBench:
             'git fetch',
             f'git checkout {branch}',
             'git pull',
+            # Recover from corrupted rustup metadata (e.g. empty settings.toml).
+            'if [ -f "$HOME/.rustup/settings.toml" ] && ! grep -q "^version" "$HOME/.rustup/settings.toml"; '
+            'then echo "Detected corrupted rustup settings.toml; resetting it"; rm -f "$HOME/.rustup/settings.toml"; fi',
+            # Fully reinstall rustup/cargo when rustup is broken or missing.
+            'if ! rustup --version >/dev/null 2>&1; then '
+            'echo "rustup not healthy; performing full reinstall"; '
+            'rm -rf "$HOME/.rustup" "$HOME/.cargo"; '
+            'curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable; '
+            'fi',
             # Source cargo environment before building
             'source $HOME/.cargo/env || export PATH=$HOME/.cargo/bin:$PATH',
+            'rustup toolchain install stable || true',
             'rustup default stable || true',
             'rustup component add cargo rustc rust-std || true',
-            'if rustup run stable cargo --version >/dev/null 2>&1; then '
-            'rustup run stable cargo build --release --features benchmark; '
-            'else cargo build --release --features benchmark; fi',
+            'cargo build --release --features benchmark',
             # Keep the node source directory intact; only ensure benchmark_client launcher exists.
             'rm -f benchmark_client 2>/dev/null || true',
             'test -f ./target/release/benchmark_client && ln -sf ./target/release/benchmark_client ./benchmark_client || true',
@@ -978,8 +986,46 @@ class CloudLabBench:
                 port = host.get('port', 22)
                 conn_kwargs = self._get_connection_kwargs({})
                 conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs)
-                for local, remote in files_to_upload:
-                    conn.put(local, remote)
+                current_local = None
+                current_remote = None
+                current_local_size = None
+                try:
+                    for local, remote in files_to_upload:
+                        current_local = local
+                        current_remote = remote
+                        local_path = Path(local)
+                        current_local_size = local_path.stat().st_size if local_path.exists() else None
+                        Print.info(
+                            f'Uploading {local} ({current_local_size} bytes) '
+                            f'to {username}@{hostname}:{remote}'
+                        )
+                        conn.put(local, remote)
+                except Exception as upload_error:
+                    diagnostics = []
+                    if current_remote:
+                        remote_parent = str(Path(current_remote).parent)
+                        # Gather quick remote diagnostics to explain common upload failures.
+                        cmd = (
+                            f'echo "pwd=$(pwd)"; '
+                            f'echo "remote_parent={shlex.quote(remote_parent)}"; '
+                            f'ls -ld {shlex.quote(remote_parent)} || true; '
+                            f'df -h {shlex.quote(remote_parent)} || true; '
+                            f'df -i {shlex.quote(remote_parent)} || true'
+                        )
+                        result = conn.run(cmd, hide=True, warn=True)
+                        diagnostics.append(result.stdout.strip())
+
+                    details = (
+                        f'Upload failed on host {username}@{hostname}:{port}. '
+                        f'local={current_local}, remote={current_remote}, '
+                        f'local_size={current_local_size}. '
+                        f'Original error: {upload_error}'
+                    )
+                    if diagnostics:
+                        details += f'\nRemote diagnostics:\n{diagnostics[0]}'
+                    raise BenchError(details, upload_error)
+                finally:
+                    conn.close()
         except Exception as e:
             raise BenchError('Failed to upload configuration files', e)
         
@@ -1320,17 +1366,16 @@ SCRIPTEOF'''
             worker_rates = [rate_share] * workers_total
         elif bench_parameters.rate_type in ('imbalanced', 'imbalance'):
             s = node_parameters.json.get('s')
-            v = node_parameters.json.get('v')
-            if s is None or v is None:
+            if s is None:
                 raise BenchError(
                     'rate_type=imbalanced requires node parameters "s" and "v"',
                     ValueError('Missing Zipf parameters s/v')
                 )
             try:
-                worker_rates = ZipfAllocator(rate, workers_total, float(s), float(v)).allocate()
+                worker_rates = ZipfAllocator(rate, workers_total, float(s)).allocate()
             except Exception as e:
                 raise BenchError('Failed to allocate imbalanced client rates', e)
-            Print.info(f'Client rates (Zipf, s={s}, v={v}): {worker_rates}')
+            Print.info(f'Client rates (Zipf, s={s}): {worker_rates}')
         else:
             raise BenchError(
                 f'Unknown rate_type "{bench_parameters.rate_type}" (expected "balanced" or "imbalanced")',

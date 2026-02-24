@@ -20,7 +20,6 @@ class LocalBench:
             self.node_parameters = NodeParameters(node_parameters_dict)
             if bench_parameters_dict['rate_type'] == 'imbalanced':
                 self.s = node_parameters_dict['s']
-                self.v = node_parameters_dict['v']
             self.solid_step_length = node_parameters_dict['solid_step_length']
             self.solid_step_number = node_parameters_dict['solid_step_number']
             self.solid_reference = node_parameters_dict['reference']
@@ -96,7 +95,7 @@ class LocalBench:
                         self._background_run(cmd, log_file)
             else:
                 # generate a list of rate with zipf
-                zipf_allocator = ZipfAllocator(rate, committee.workers(), self.s, self.v)
+                zipf_allocator = ZipfAllocator(rate, committee.workers(), self.s)
                 rates = zipf_allocator.allocate()
                 print(rates)
                 # run the clients with the generated rate
