@@ -23,6 +23,7 @@ class LocalBench:
             self.solid_step_length = node_parameters_dict['solid_step_length']
             self.solid_step_number = node_parameters_dict['solid_step_number']
             self.solid_reference = node_parameters_dict['reference']
+            self.coverage = node_parameters_dict['coverage']
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
 
@@ -74,7 +75,7 @@ class LocalBench:
                 keys += [Key.from_file(filename)]
 
             names = [x.name for x in keys]
-            committee = LocalCommittee(names, self.BASE_PORT, self.workers, self.solid_step_length, self.solid_step_number, self.solid_reference)
+            committee = LocalCommittee(names, self.BASE_PORT, self.workers, self.solid_step_length, self.solid_step_number, self.solid_reference, self.coverage)
             committee.print(PathMaker.committee_file())
 
             self.node_parameters.print(PathMaker.parameters_file())

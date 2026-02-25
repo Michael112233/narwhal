@@ -30,7 +30,7 @@ def local(ctx, debug=True):
         'nodes': 4,
         'workers': 1,
         'rate_type': 'imbalanced',
-        'rate': 40000,
+        'rate': 160000,
         'tx_size': 512,
         'duration': 40,
     }
@@ -45,8 +45,8 @@ def local(ctx, debug=True):
         'solid_step_length': 2,
         'reference': 3,
         'solid_step_number': 1,
-        's': 1.01,
-        'v': 1,
+        'coverage': 3,
+        's': 0.99
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -234,7 +234,7 @@ def cloudlab_remote(ctx, debug=False, solid_step_length=3, reference=2):
         'rate_type': 'imbalanced',
         'rate': [40000],
         'tx_size': 512,
-        'duration': 120,
+        'duration': 20,
         'runs': 1,
     }
     node_params = {
@@ -248,6 +248,7 @@ def cloudlab_remote(ctx, debug=False, solid_step_length=3, reference=2):
         'solid_step_length': 2,
         'solid_step_number': 1,
         'reference': 2,
+        'coverage': 3,
         's': 1.01,
         'v': 1,
     }

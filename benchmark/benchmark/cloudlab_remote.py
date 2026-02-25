@@ -965,12 +965,14 @@ class CloudLabBench:
         solid_step_length = node_parameters.json.get('solid_step_length', 2)
         solid_step_number = node_parameters.json.get('solid_step_number', 1)
         solid_reference = node_parameters.json.get('reference', 3)
+        solid_coverage = node_parameters.json.get('coverage', 3)
         committee = Committee(
             addresses,
             self.settings.base_port,
             solid_step_length,
             solid_step_number,
             solid_reference,
+            solid_coverage,
         )
         committee.print(PathMaker.committee_file())
         

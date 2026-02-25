@@ -144,6 +144,7 @@ pub struct Committee {
     pub solid_step_length: usize,
     pub solid_step_number: usize,
     pub reference: usize,
+    pub coverage: usize,
 }
 
 impl Import for Committee {}
@@ -181,10 +182,11 @@ impl Committee {
         // Apart from the quorum threshold, this is specially for processing headers.
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         if current_round % self.solid_step_length() as u64 == 0 && current_round > 1 {
-            return self.reference as Stake;
+            return self.coverage as Stake;
             // return (total_votes + 2) / 3;
         } else {
-            return (total_votes + 2) / 3;
+            // 
+            return self.reference as Stake;
         }
     }
 
