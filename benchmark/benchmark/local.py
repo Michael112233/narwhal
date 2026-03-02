@@ -20,9 +20,9 @@ class LocalBench:
             self.node_parameters = NodeParameters(node_parameters_dict)
             if bench_parameters_dict['rate_type'] == 'imbalanced':
                 self.s = node_parameters_dict['s']
-            self.solid_step_length = node_parameters_dict['solid_step_length']
-            self.solid_step_number = node_parameters_dict['solid_step_number']
-            self.solid_reference = node_parameters_dict['reference']
+            self.sigma = node_parameters_dict['sigma']
+            self.kappa = node_parameters_dict['kappa']
+            self.reference = node_parameters_dict['reference']
             self.coverage = node_parameters_dict['coverage']
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
@@ -75,7 +75,7 @@ class LocalBench:
                 keys += [Key.from_file(filename)]
 
             names = [x.name for x in keys]
-            committee = LocalCommittee(names, self.BASE_PORT, self.workers, self.solid_step_length, self.solid_step_number, self.solid_reference, self.coverage)
+            committee = LocalCommittee(names, self.BASE_PORT, self.workers, self.sigma, self.kappa, self.reference, self.coverage)
             committee.print(PathMaker.committee_file())
 
             self.node_parameters.print(PathMaker.parameters_file())

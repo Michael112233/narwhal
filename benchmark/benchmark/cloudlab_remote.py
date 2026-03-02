@@ -962,17 +962,17 @@ class CloudLabBench:
             )
             raise BenchError(error_msg, ValueError(error_msg))
         
-        solid_step_length = node_parameters.json.get('solid_step_length', 2)
-        solid_step_number = node_parameters.json.get('solid_step_number', 1)
-        solid_reference = node_parameters.json.get('reference', 3)
-        solid_coverage = node_parameters.json.get('coverage', 3)
+        sigma = node_parameters.json.get('sigma', 1)
+        kappa = node_parameters.json.get('kappa', 2)
+        reference = node_parameters.json.get('reference', 4)
+        coverage = node_parameters.json.get('coverage', 7)
         committee = Committee(
             addresses,
             self.settings.base_port,
-            solid_step_length,
-            solid_step_number,
-            solid_reference,
-            solid_coverage,
+            sigma,
+            kappa,
+            reference,
+            coverage,
         )
         committee.print(PathMaker.committee_file())
         

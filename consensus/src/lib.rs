@@ -123,7 +123,6 @@ impl Consensus {
             let r = round - 1;
 
             // We only elect leaders for even round numbers.
-            debug!("r: {}, solid_step_length: {}", r, self.committee.solid_step_length());
             if r % self.committee.solid_step_length() != 0 || r < 2 * self.committee.solid_step_length() {
                 continue;
             }

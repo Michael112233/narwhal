@@ -42,7 +42,7 @@ class Committee:
         }
     '''
 
-    def __init__(self, addresses, base_port, solid_step_length, solid_step_number, solid_reference, solid_coverage):
+    def __init__(self, addresses, base_port, sigma, kappa, reference, coverage):
         ''' The `addresses` field looks as follows:
             { 
                 "name": ["host", "host", ...],
@@ -63,10 +63,10 @@ class Committee:
         port = base_port
         self.json = {
             'authorities': OrderedDict(), 
-            'solid_step_length': solid_step_length,
-            'solid_step_number': solid_step_number,
-            'reference': solid_reference,
-            'coverage': solid_coverage,
+            'sigma': sigma,
+            'kappa': kappa,
+            'reference': reference,
+            'coverage': coverage,
         }
         for name, hosts in addresses.items():
             host = hosts.pop(0)
@@ -158,13 +158,13 @@ class Committee:
 
 
 class LocalCommittee(Committee):
-    def __init__(self, names, port, workers, solid_step_length, solid_step_number, solid_reference, solid_coverage):
+    def __init__(self, names, port, workers, sigma, kappa, reference, coverage):
         assert isinstance(names, list)
         assert all(isinstance(x, str) for x in names)
         assert isinstance(port, int)
         assert isinstance(workers, int) and workers > 0
         addresses = OrderedDict((x, ['127.0.0.1']*(1+workers)) for x in names)
-        super().__init__(addresses, port, solid_step_length, solid_step_number, solid_reference, solid_coverage)
+        super().__init__(addresses, port, sigma, kappa, reference, coverage)
 
 
 class NodeParameters:
