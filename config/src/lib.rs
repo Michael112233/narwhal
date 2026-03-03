@@ -277,7 +277,7 @@ impl Committee {
 
     /// Returns the length of the solid step.
     pub fn solid_step_length(&self) -> u64 {
-        self.sigma as u64
+        (self.sigma + 1) as u64
     }
 
 }
