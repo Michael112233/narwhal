@@ -350,12 +350,25 @@ impl Core {
             .or_insert_with(|| Box::new(CertificatesAggregator::new(target_round)))
             .append(certificate.clone(), &self.committee)?
         {
-            // For round 1, wait until we have headers from all nodes before moving to round 2.
-            if target_round % self.committee.solid_step_length() == 1 && parents.len() < self.committee.max_threshold() as usize {
+            // For the first round of each solid-step window, gate on the number
+            // of vertices created in this exact round (not the total parent set).
+            let mut round_vertices = 0usize;
+            for digest in &parents {
+                if let Ok(Some(bytes)) = self.store.read(digest.to_vec()).await {
+                    if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
+                        if cert.round() == target_round {
+                            round_vertices += 1;
+                        }
+                    }
+                }
+            }
+            if target_round % self.committee.solid_step_length() == 1
+                && round_vertices < self.committee.max_threshold() as usize
+            {
                 debug!(
-                    "Round {} parents {} < {}; delaying move to round {}",
+                    "Round {} vertices {} < {}; delaying move to round {}",
                     target_round,
-                    parents.len(),
+                    round_vertices,
                     self.committee.size(),
                     target_round + 1
                 );
