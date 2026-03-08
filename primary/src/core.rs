@@ -372,7 +372,7 @@ impl Core {
                     self.committee.size(),
                     target_round + 1
                 );
-                return Ok(());
+                // return Ok(());
             }
             // Send it to the `Proposer`.
             self.tx_proposer
