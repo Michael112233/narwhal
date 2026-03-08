@@ -363,7 +363,7 @@ impl Core {
                 }
             }
             if target_round % self.committee.solid_step_length() == 1
-                && round_vertices < self.committee.max_threshold() as usize
+                // && round_vertices < self.committee.max_threshold() as usize
             {
                 debug!(
                     "Round {} vertices {} < {}; delaying move to round {}",
