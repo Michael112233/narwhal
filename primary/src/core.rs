@@ -126,8 +126,16 @@ impl Core {
         self.current_header = header.clone();
         self.votes_aggregator = VotesAggregator::new();
 
-        // Broadcast the new header in a reliable manner.
-        let addresses = self
+        // Broadcast the new header in a reliable manner:
+        // 1. Primary receives parents from `CertificateAggregator`
+        // 2. Proposer creates header and sends it here
+        // 3. Core broadcasts header to all other primaries
+        debug!(
+            "Broadcasting header {} (round {}) to other primaries",
+            header.id,
+            header.round
+        );
+        let addresses: Vec<_> = self
             .committee
             .others_primaries(&self.name)
             .iter()
@@ -135,11 +143,32 @@ impl Core {
             .collect();
         let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone()))
             .expect("Failed to serialize our own header");
-        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-        self.cancel_handlers
-            .entry(header.round)
-            .or_insert_with(Vec::new)
-            .extend(handlers);
+        // Send to each primary individually so we can log per-node success/failure.
+        let header_id = header.id.clone();
+        let header_round = header.round;
+        for address in addresses {
+            let handler = self
+                .network
+                .send(address, Bytes::from(bytes.clone()))
+                .await;
+            let id = header_id.clone();
+            tokio::spawn(async move {
+                match handler.await {
+                    Ok(_) => {
+                        debug!(
+                            "Header {} (round {}) successfully delivered to primary {}",
+                            id, header_round, address
+                        );
+                    }
+                    Err(_) => {
+                        debug!(
+                            "Header {} (round {}) delivery to primary {} was canceled or failed",
+                            id, header_round, address
+                        );
+                    }
+                }
+            });
+        }
 
         // Process the header.
         self.process_header(&header).await
@@ -151,7 +180,7 @@ impl Core {
             .node_index(&header.author)
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
         debug!(
-            "Received header {} (origin Node{}, round {})",
+            "Received header {} (origin Node{}, round {}): entering processing pipeline",
             header.id,
             origin_node,
             header.round
@@ -168,7 +197,11 @@ impl Core {
         // reschedule processing of this header.
         let parents = self.synchronizer.get_parents(header).await?;
         if parents.is_empty() {
-            debug!("Processing of {} suspended: missing parent(s)", header.id);
+            debug!(
+                "Header {} (round {}) suspended in synchronizer: missing parent(s), will be retried by HeaderWaiter",
+                header.id,
+                header.round
+            );
             return Ok(());
         }
 
@@ -211,7 +244,12 @@ impl Core {
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
         if self.synchronizer.missing_payload(header).await? {
-            debug!("Processing of {} suspended: missing payload", header);
+            debug!(
+                "Header {} (round {}) suspended in synchronizer: missing payload, will be retried by HeaderWaiter, header={:?}",
+                header.id,
+                header.round,
+                header
+            );
             return Ok(());
         }
 
@@ -220,16 +258,34 @@ impl Core {
         self.store.write(header.id.to_vec(), bytes).await;
 
         // Check if we can vote for this header.
-        if self
+        let already_voted = self
             .last_voted
             .entry(header.round)
             .or_insert_with(HashSet::new)
-            .insert(header.author)
-        {
+            .contains(&header.author);
+
+        if already_voted {
+            debug!(
+                "Discarding header {} (round {}): already voted for author in this round",
+                header.id,
+                header.round
+            );
+        } else {
+            // Mark that we're voting for this author in this round.
+            self.last_voted
+                .entry(header.round)
+                .or_insert_with(HashSet::new)
+                .insert(header.author);
+
             // Make a vote and send it to the header's creator.
             let vote = Vote::new(header, &self.name, &mut self.signature_service).await;
-            debug!("Created {:?}", vote);
+            debug!("Created vote {:?} for header {} (round {})", vote, header.id, header.round);
             if vote.origin == self.name {
+                debug!(
+                    "Processing own vote for header {} (round {}) locally",
+                    header.id,
+                    header.round
+                );
                 self.process_vote(vote)
                     .await
                     .expect("Failed to process our own vote");
@@ -242,6 +298,10 @@ impl Core {
                 let bytes = bincode::serialize(&PrimaryMessage::Vote(vote))
                     .expect("Failed to serialize our own vote");
                 let handler = self.network.send(address, Bytes::from(bytes)).await;
+                debug!(
+                    "Forwarding vote for header {} (round {}) to primary at {}",
+                    header.id, header.round, address
+                );
                 self.cancel_handlers
                     .entry(header.round)
                     .or_insert_with(Vec::new)
@@ -277,8 +337,18 @@ impl Core {
                 self.current_header.round
             );
 
-            // Broadcast the certificate.
-            let addresses = self
+            // Broadcast the certificate:
+            // 1. Local node assembles certificate from votes
+            // 2. Certificate is broadcast to all other primaries
+            // 3. Each primary delivers it to `Core::process_certificate`
+            let cert_id = certificate.header.id.clone();
+            let cert_round = certificate.round();
+            debug!(
+                "Broadcasting certificate {} (round {}) to other primaries",
+                cert_id,
+                cert_round
+            );
+            let addresses: Vec<_> = self
                 .committee
                 .others_primaries(&self.name)
                 .iter()
@@ -286,11 +356,29 @@ impl Core {
                 .collect();
             let bytes = bincode::serialize(&PrimaryMessage::Certificate(certificate.clone()))
                 .expect("Failed to serialize our own certificate");
-            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-            self.cancel_handlers
-                .entry(certificate.round())
-                .or_insert_with(Vec::new)
-                .extend(handlers);
+            for address in addresses {
+                let handler = self
+                    .network
+                    .send(address, Bytes::from(bytes.clone()))
+                    .await;
+                let id = cert_id.clone();
+                tokio::spawn(async move {
+                    match handler.await {
+                        Ok(_) => {
+                            debug!(
+                                "Certificate {} (round {}) successfully delivered to primary {}",
+                                id, cert_round, address
+                            );
+                        }
+                        Err(_) => {
+                            debug!(
+                                "Certificate {} (round {}) delivery to primary {} was canceled or failed",
+                                id, cert_round, address
+                            );
+                        }
+                    }
+                });
+            }
 
             // Process the new certificate.
             self.process_certificate(certificate)
@@ -307,7 +395,7 @@ impl Core {
             .node_index(&origin)
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
         debug!(
-            "Received certificate {} (origin Node{}, round {})",
+            "Received certificate {} (origin Node{}, round {}): entering processing pipeline",
             certificate.header.id,
             origin_node,
             certificate.round()
@@ -331,8 +419,9 @@ impl Core {
         // them and trigger re-processing of this certificate.
         if !self.synchronizer.deliver_certificate(&certificate).await? {
             debug!(
-                "Processing of {:?} suspended: missing ancestors",
-                certificate
+                "Certificate {} (round {}) suspended in synchronizer: missing ancestor certificates, will be retried by CertificateWaiter",
+                certificate.header.id,
+                certificate.round()
             );
             return Ok(());
         }
@@ -496,14 +585,29 @@ impl Core {
                             );
                             match self.sanitize_header(&header) {
                                 Ok(()) => self.process_header(&header).await,
-                                error => error
+                                Err(e) => {
+                                    debug!(
+                                        "Discarding header {} (round {}) in sanitize_header: {}",
+                                        header.id,
+                                        header.round,
+                                        e
+                                    );
+                                    Err(e)
+                                }
                             }
 
                         },
                         PrimaryMessage::Vote(vote) => {
                             match self.sanitize_vote(&vote) {
                                 Ok(()) => self.process_vote(vote).await,
-                                error => error
+                                Err(e) => {
+                                    debug!(
+                                        "Discarding vote for header {:?} in sanitize_vote: {}",
+                                        vote.id,
+                                        e
+                                    );
+                                    Err(e)
+                                }
                             }
                         },
                         PrimaryMessage::Certificate(certificate) => {
@@ -519,7 +623,15 @@ impl Core {
                             );
                             match self.sanitize_certificate(&certificate) {
                                 Ok(()) =>  self.process_certificate(certificate).await,
-                                error => error
+                                Err(e) => {
+                                    debug!(
+                                        "Discarding certificate {} (round {}) in sanitize_certificate: {}",
+                                        certificate.header.id,
+                                        certificate.round(),
+                                        e
+                                    );
+                                    Err(e)
+                                }
                             }
                         },
                         _ => panic!("Unexpected core message")
