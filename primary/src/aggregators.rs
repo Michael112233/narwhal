@@ -38,6 +38,13 @@ impl VotesAggregator {
 
         self.votes.push((author, vote.signature));
         self.weight += committee.stake(&author);
+        debug!(
+            "VotesAggregator: received vote for header {} (round {}), votes in this round for this header: {} (weight={})",
+            header.id,
+            header.round,
+            self.votes.len(),
+            self.weight
+        );
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures quorum is only reached once.
             return Ok(Some(Certificate {

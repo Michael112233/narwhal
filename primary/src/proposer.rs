@@ -7,7 +7,7 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
@@ -40,6 +40,8 @@ pub struct Proposer {
     round: Round,
     /// Holds the certificates' ids waiting to be included in the next header.
     last_parents: Vec<Digest>,
+    /// Buffer of parents for future rounds (round -> parents digests).
+    buffered_parents: HashMap<Round, Vec<Digest>>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -85,6 +87,7 @@ impl Proposer {
                 tx_core,
                 round: 1,
                 last_parents: genesis,
+                buffered_parents: HashMap::new(),
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 solid_step_length,
@@ -177,8 +180,16 @@ impl Proposer {
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
-                    if round < self.round {
-                        debug!("Received header for round {} but we are at round {}", round, self.round);
+                    if round > self.round {
+                        // This is parents info for a future round. Buffer it and use it
+                        // when we eventually advance to that round.
+                        debug!(
+                            "Buffering parents for future round {} while proposer is at round {} ({} parents)",
+                            round,
+                            self.round,
+                            parents.len()
+                        );
+                        self.buffered_parents.insert(round, parents);
                         continue;
                     }
 
@@ -189,6 +200,18 @@ impl Proposer {
 
                     // Signal that we have enough parent certificates to propose a new header.
                     self.last_parents = parents;
+
+                    // After finishing this round, check if we already buffered parents
+                    // for the next round; if so, load them immediately so we can
+                    // propose without waiting for Core to resend.
+                    if let Some(next_parents) = self.buffered_parents.remove(&self.round) {
+                        debug!(
+                            "Loaded buffered parents for round {} ({} parents)",
+                            self.round,
+                            next_parents.len()
+                        );
+                        self.last_parents = next_parents;
+                    }
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     self.payload_size += digest.size();
