@@ -52,6 +52,8 @@ pub struct Core {
 
     /// The last garbage collected round.
     gc_round: Round,
+    /// The current round of the dag (synchronized with Proposer's round).
+    current_round: Round,
     /// The authors of the last voted headers.
     last_voted: HashMap<Round, HashSet<PublicKey>>,
     /// The set of headers we are currently processing.
@@ -108,6 +110,7 @@ impl Core {
                 tx_consensus,
                 tx_proposer,
                 gc_round: 0,
+                current_round: 1, // Start at round 1, same as Proposer
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 current_header: Header::default(),
@@ -432,7 +435,8 @@ impl Core {
 
         // Check if we have enough certificates to enter a new dag round and propose a header.
         // Older certificates are attached as weak edges to the currently ongoing round.
-        let target_round = certificate.round();
+        // let target_round = certificate.round();
+        let target_round = self.current_round;
         if let Some(parents) = self
             .certificates_aggregators
             .entry(target_round)
