@@ -289,7 +289,7 @@ impl Proposer {
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
                     debug!("Received parents for round {} while proposer is at round {}", round, self.round);
-                    if round > self.round {
+                    if round >= self.round {
                         // This is parents info for a future round. Buffer it only if it's the maximum round
                         // we've seen so far (buffered_parents only keeps one entry: the maximum round).
                         let parents_len = parents.len();
