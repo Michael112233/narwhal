@@ -73,7 +73,6 @@ impl Proposer {
             .collect();
         let solid_step_length = committee.solid_step_length() as u64;
 
-        debug!("Start proposer! at round 1");
         tokio::spawn(async move {
             Self {
                 name,
@@ -98,21 +97,6 @@ impl Proposer {
 
     async fn make_header(&mut self) {
         // Make a new header.
-        // Get the first parent's round for logging
-        let first_parent_round = if let Some(first_parent) = self.last_parents.first() {
-            if let Ok(Some(bytes)) = self.store.read(first_parent.to_vec()).await {
-                if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                    Some(cert.round())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
         let mut header = Header::new(
             self.name,
             self.round,
@@ -124,19 +108,11 @@ impl Proposer {
         let origin_node = self
             .node_id
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
-        
-        let parents_info = if let Some(round) = first_parent_round {
-            format!("first parent round: {}", round)
-        } else {
-            "first parent round: ?".to_string()
-        };
-        
         debug!(
-            "Created header {} (origin Node{}, round {}), {}",
+            "Created header {} (origin Node{}, round {})",
             header.id,
             origin_node,
-            header.round,
-            parents_info
+            header.round
         );
         debug!("Created {:?}", header);
 
@@ -146,7 +122,6 @@ impl Proposer {
             let mut vertices: HashSet<Digest> = HashSet::new();
             vertices.insert(header.id.clone());
             header.store_solid_step_vertex(vertices);
-            debug!("Stored the nodes which can be linked to in the first round");
         } else {
             let parents: Vec<_> = header.parents.iter().cloned().collect();
             let mut merged = HashSet::new();
@@ -154,9 +129,7 @@ impl Proposer {
             for parent in parents {
                 let bytes = self.store.notify_read(parent.to_vec()).await.unwrap();
                 let cert: Certificate = bincode::deserialize(&bytes).unwrap();
-                let solid_step_vertices_count = cert.header.solid_step_vertices.len();
                 merged.extend(cert.header.solid_step_vertices);
-                debug!("The number of the solid step vertices is {}", solid_step_vertices_count);
             }
 
             header.store_solid_step_vertex(merged);
@@ -182,6 +155,9 @@ impl Proposer {
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
+        let write_enough_parent = false;
+        let write_enough_digests = false;   
+        let write_timer_expired = false;
 
         loop {
             // Check if we can propose a new header. We propose a new header when one of the following
@@ -192,58 +168,46 @@ impl Proposer {
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
+            if enough_parents && !write_enough_parent {
+                debug!("We have enough parents to propose a new header");
+                write_enough_parent = true;
+            }
+            if enough_digests && !write_enough_digests {
+                debug!("We have enough digests to propose a new header");
+                write_enough_digests = true;
+            }
+            if timer_expired {
+                debug!("The timer has expired");
+                write_timer_expired = true;
+            }
             if (timer_expired || enough_digests) && enough_parents {
-                // Make a new header for the current round.
-                debug!(
-                    "Conditions met to propose header for round {}: enough_parents={}, enough_digests={}, timer_expired={}",
-                    self.round,
-                    enough_parents,
-                    enough_digests,
-                    timer_expired
-                );
+                write_enough_parent = false;
+                write_enough_digests = false;
+                write_timer_expired = false;
+                
+                // Make a new header.
                 self.make_header().await;
                 self.payload_size = 0;
 
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
                 timer.as_mut().reset(deadline);
-            } 
-            // else {
-            //     // Log why we cannot propose a header
-            //     let mut reasons = Vec::new();
-            //     if !enough_parents {
-            //         reasons.push(format!("not enough parents (last_parents.len()={})", self.last_parents.len()));
-            //     }
-            //     if !enough_digests {
-            //         reasons.push(format!("not enough digests (payload_size={}, header_size={})", self.payload_size, self.header_size));
-            //     }
-            //     if !timer_expired {
-            //         reasons.push("timer not expired".to_string());
-            //     }
-            //     debug!(
-            //         "Cannot propose header for round {}: {}",
-            //         self.round,
-            //         reasons.join(", ")
-            //     );
-            // }
+            }
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
-                    debug!("Received parents for round {} while proposer is at round {}", round, self.round);
-                    
-                    // Advance to the next round.
-                    let old_round = self.round;
-                    let parents_len = parents.len();
-                    self.round = round + 1;
-                    debug!("Dag moved from round {} to round {}", old_round, self.round);
+                    if round < self.round {
+                        debug!("Received header for round {} but we are at round {}", round, self.round);
+                        continue;
+                    }
 
-                    // Update last_parents with the new parents.
+                    // Advance to the next round.
+                    self.round = round + 1;
+                    // self.round = std::cmp::max(self.round, round) + 1;
+                    debug!("Dag moved to round {}", self.round);
+
+                    // Signal that we have enough parent certificates to propose a new header.
                     self.last_parents = parents;
-                    debug!(
-                        "Updated last_parents for round {} ({} parents)",
-                        self.round,
-                        parents_len
-                    );
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     self.payload_size += digest.size();
