@@ -104,6 +104,21 @@ impl Proposer {
 
     async fn make_header(&mut self) {
         // Make a new header.
+        // Get the first parent's round for logging
+        let first_parent_round = if let Some(first_parent) = self.last_parents.first() {
+            if let Ok(Some(bytes)) = self.store.read(first_parent.to_vec()).await {
+                if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
+                    Some(cert.round())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
         let mut header = Header::new(
             self.name,
             self.round,
@@ -115,11 +130,19 @@ impl Proposer {
         let origin_node = self
             .node_id
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
+        
+        let parents_info = if let Some(round) = first_parent_round {
+            format!("first parent round: {}", round)
+        } else {
+            "first parent round: ?".to_string()
+        };
+        
         debug!(
-            "Created header {} (origin Node{}, round {})",
+            "Created header {} (origin Node{}, round {}), {}",
             header.id,
             origin_node,
-            header.round
+            header.round,
+            parents_info
         );
         debug!("Created {:?}", header);
 
@@ -137,8 +160,9 @@ impl Proposer {
             for parent in parents {
                 let bytes = self.store.notify_read(parent.to_vec()).await.unwrap();
                 let cert: Certificate = bincode::deserialize(&bytes).unwrap();
+                let solid_step_vertices_count = cert.header.solid_step_vertices.len();
                 merged.extend(cert.header.solid_step_vertices);
-                debug!("The number of the solid step vertices is {}", cert.header.solid_step_vertices.len());
+                debug!("The number of the solid step vertices is {}", solid_step_vertices_count);
             }
 
             header.store_solid_step_vertex(merged);
