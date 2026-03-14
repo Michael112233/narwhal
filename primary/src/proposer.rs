@@ -180,7 +180,8 @@ impl Proposer {
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
-                    if round >= self.round {
+                    debug!("Received parents for round {} while proposer is at round {}", round, self.round);
+                    if round > self.round {
                         // This is parents info for a future round. Buffer it and use it
                         // when we eventually advance to that round.
                         debug!(
