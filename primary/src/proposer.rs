@@ -77,6 +77,7 @@ impl Proposer {
             .collect();
         let solid_step_length = committee.solid_step_length() as u64;
 
+        debug!("Start proposer! at round {}", round);
         tokio::spawn(async move {
             Self {
                 name,
