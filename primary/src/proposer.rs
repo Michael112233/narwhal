@@ -240,24 +240,25 @@ impl Proposer {
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
                 timer.as_mut().reset(deadline);
-            } else {
-                // Log why we cannot propose a header
-                let mut reasons = Vec::new();
-                if !enough_parents {
-                    reasons.push(format!("not enough parents (last_parents.len()={})", self.last_parents.len()));
-                }
-                if !enough_digests {
-                    reasons.push(format!("not enough digests (payload_size={}, header_size={})", self.payload_size, self.header_size));
-                }
-                if !timer_expired {
-                    reasons.push("timer not expired".to_string());
-                }
-                debug!(
-                    "Cannot propose header for round {}: {}",
-                    self.round,
-                    reasons.join(", ")
-                );
-            }
+            } 
+            // else {
+            //     // Log why we cannot propose a header
+            //     let mut reasons = Vec::new();
+            //     if !enough_parents {
+            //         reasons.push(format!("not enough parents (last_parents.len()={})", self.last_parents.len()));
+            //     }
+            //     if !enough_digests {
+            //         reasons.push(format!("not enough digests (payload_size={}, header_size={})", self.payload_size, self.header_size));
+            //     }
+            //     if !timer_expired {
+            //         reasons.push("timer not expired".to_string());
+            //     }
+            //     debug!(
+            //         "Cannot propose header for round {}: {}",
+            //         self.round,
+            //         reasons.join(", ")
+            //     );
+            // }
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
