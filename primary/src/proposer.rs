@@ -129,6 +129,7 @@ impl Proposer {
             let mut vertices: HashSet<Digest> = HashSet::new();
             vertices.insert(header.id.clone());
             header.store_solid_step_vertex(vertices);
+            debug!("Stored the nodes which can be linked to in the first round");
         } else {
             let parents: Vec<_> = header.parents.iter().cloned().collect();
             let mut merged = HashSet::new();
@@ -137,6 +138,7 @@ impl Proposer {
                 let bytes = self.store.notify_read(parent.to_vec()).await.unwrap();
                 let cert: Certificate = bincode::deserialize(&bytes).unwrap();
                 merged.extend(cert.header.solid_step_vertices);
+                debug!("The number of the solid step vertices is {}", cert.header.solid_step_vertices.len());
             }
 
             header.store_solid_step_vertex(merged);
