@@ -77,7 +77,7 @@ impl Proposer {
             .collect();
         let solid_step_length = committee.solid_step_length() as u64;
 
-        debug!("Start proposer! at round {}", round);
+        debug!("Start proposer! at round 1");
         tokio::spawn(async move {
             Self {
                 name,
@@ -241,21 +241,22 @@ impl Proposer {
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
                 timer.as_mut().reset(deadline);
             } else {
+                // Log why we cannot propose a header
+                let mut reasons = Vec::new();
                 if !enough_parents {
-                    debug!(
-                        "Cannot propose header for round {}: not enough parents (last_parents.len()={})",
-                        self.round,
-                        self.last_parents.len()
-                    );
+                    reasons.push(format!("not enough parents (last_parents.len()={})", self.last_parents.len()));
                 }
-                if !enough_digests && !timer_expired {
-                    debug!(
-                        "Cannot propose header for round {}: not enough digests (payload_size={}, header_size={}) and timer not expired",
-                        self.round,
-                        self.payload_size,
-                        self.header_size
-                    );
+                if !enough_digests {
+                    reasons.push(format!("not enough digests (payload_size={}, header_size={})", self.payload_size, self.header_size));
                 }
+                if !timer_expired {
+                    reasons.push("timer not expired".to_string());
+                }
+                debug!(
+                    "Cannot propose header for round {}: {}",
+                    self.round,
+                    reasons.join(", ")
+                );
             }
 
             tokio::select! {
