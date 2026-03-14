@@ -177,8 +177,8 @@ impl Committee {
         // If N = 3f + 1 + k (0 <= k < 3)
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        2 * total_votes / 3 + 1
-        // (total_votes + 2) / 3
+        // 2 * total_votes / 3 + 1
+        (total_votes + 2) / 3
     }
 
     pub fn processing_threshold(&self, current_round: u64) -> Stake {
