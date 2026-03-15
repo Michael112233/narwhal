@@ -155,9 +155,9 @@ impl Proposer {
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
-        let write_enough_parent = false;
-        let write_enough_digests = false;   
-        let write_timer_expired = false;
+        let mut write_enough_parent = false;
+        let mut write_enough_digests = false;   
+        let mut write_timer_expired = false;
 
         loop {
             // Check if we can propose a new header. We propose a new header when one of the following
