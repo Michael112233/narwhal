@@ -157,7 +157,6 @@ impl Proposer {
         tokio::pin!(timer);
         let mut write_enough_parent = false;
         let mut write_enough_digests = false;   
-        let mut write_timer_expired = false;
 
         loop {
             // Check if we can propose a new header. We propose a new header when one of the following
@@ -176,14 +175,12 @@ impl Proposer {
                 debug!("We have enough digests to propose a new header");
                 write_enough_digests = true;
             }
-            if timer_expired {
-                debug!("The timer has expired");
-                write_timer_expired = true;
-            }
             if (timer_expired || enough_digests) && enough_parents {
                 write_enough_parent = false;
                 write_enough_digests = false;
-                write_timer_expired = false;
+                if timer_expired {
+                    debug!("The timer has expired");
+                }
                 
                 // Make a new header.
                 self.make_header().await;
