@@ -420,14 +420,14 @@ impl Core {
 
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
-        if !self.synchronizer.deliver_certificate(&certificate).await? {
-            debug!(
-                "Certificate {} (round {}) suspended in synchronizer: missing ancestor certificates, will be retried by CertificateWaiter",
-                certificate.header.id,
-                certificate.round()
-            );
-            return Ok(());
-        }
+        // if !self.synchronizer.deliver_certificate(&certificate).await? {
+        //     debug!(
+        //         "Certificate {} (round {}) suspended in synchronizer: missing ancestor certificates, will be retried by CertificateWaiter",
+        //         certificate.header.id,
+        //         certificate.round()
+        //     );
+        //     return Ok(());
+        // }
 
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
@@ -452,35 +452,35 @@ impl Core {
         }
 
         // Debug: resolve each solid_step_vertex in the merge to [round, node_id].
-        let current_round = target_round + 1;
-        if current_round % self.committee.solid_step_length() == 0 && current_round > 1 {
-            if let Some(agg) = self.certificates_aggregators.get(&target_round) {
-                if let Some(digests) = agg.last_solid_step_union_digests() {
-                    let mut vertices = Vec::with_capacity(digests.len());
-                    for digest in digests {
-                        if let Ok(Some(bytes)) = self.store.read(digest.to_vec()).await {
-                            if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                                let node_id = self.node_index(&cert.origin()).unwrap_or(999);
-                                vertices.push(format!("[{},{}]", cert.round(), node_id));
-                                debug!(
-                                    "solid_step_vertex {} -> [{},{}]",
-                                    digest,
-                                    cert.round(),
-                                    node_id
-                                );
-                            }
-                        }
-                    }
-                    if !vertices.is_empty() {
-                        debug!(
-                            "solid_step_union (round {}): {}",
-                            current_round,
-                            vertices.join(", ")
-                        );
-                    }
-                }
-            }
-        }
+        // let current_round = target_round + 1;
+        // if current_round % self.committee.solid_step_length() == 0 && current_round > 1 {
+        //     if let Some(agg) = self.certificates_aggregators.get(&target_round) {
+        //         if let Some(digests) = agg.last_solid_step_union_digests() {
+        //             let mut vertices = Vec::with_capacity(digests.len());
+        //             for digest in digests {
+        //                 if let Ok(Some(bytes)) = self.store.read(digest.to_vec()).await {
+        //                     if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
+        //                         let node_id = self.node_index(&cert.origin()).unwrap_or(999);
+        //                         vertices.push(format!("[{},{}]", cert.round(), node_id));
+        //                         debug!(
+        //                             "solid_step_vertex {} -> [{},{}]",
+        //                             digest,
+        //                             cert.round(),
+        //                             node_id
+        //                         );
+        //                     }
+        //                 }
+        //             }
+        //             if !vertices.is_empty() {
+        //                 debug!(
+        //                     "solid_step_union (round {}): {}",
+        //                     current_round,
+        //                     vertices.join(", ")
+        //                 );
+        //             }
+        //         }
+        //     }
+        // }
 
         // Send it to the consensus layer.
         let id = certificate.header.id.clone();
