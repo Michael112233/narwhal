@@ -246,15 +246,15 @@ impl Core {
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
-        if self.synchronizer.missing_payload(header).await? {
-            debug!(
-                "Header {} (round {}) suspended in synchronizer: missing payload, will be retried by HeaderWaiter, header={:?}",
-                header.id,
-                header.round,
-                header
-            );
-            return Ok(());
-        }
+        // if self.synchronizer.missing_payload(header).await? {
+        //     debug!(
+        //         "Header {} (round {}) suspended in synchronizer: missing payload, will be retried by HeaderWaiter, header={:?}",
+        //         header.id,
+        //         header.round,
+        //         header
+        //     );
+        //     return Ok(());
+        // }
 
         // Store the header.
         let bytes = bincode::serialize(header).expect("Failed to serialize header");
