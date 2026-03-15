@@ -524,14 +524,14 @@ impl Core {
         // );
 
         // Ensure we receive a vote on the expected header.
-        ensure!(
-            // vote.id == self.current_header.id
-            //     && vote.origin == self.current_header.author
-            //     && vote.round == self.current_header.round,
-            vote.id == self.current_header.id 
-                && vote.origin == self.current_header.author,
-            DagError::UnexpectedVote(vote.id.clone())
-        );
+        // ensure!(
+        //     // vote.id == self.current_header.id
+        //     //     && vote.origin == self.current_header.author
+        //     //     && vote.round == self.current_header.round,
+        //     vote.id == self.current_header.id 
+        //         && vote.origin == self.current_header.author,
+        //     DagError::UnexpectedVote(vote.id.clone())
+        // );
 
         // Verify the vote.
         vote.verify(&self.committee).map_err(DagError::from)
