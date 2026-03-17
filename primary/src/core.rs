@@ -461,7 +461,7 @@ impl Core {
         // Older certificates can still be attached as weak edges by the aggregator.
         if certificate.round() > self.current_round {
             self.pending_certificates
-                .entry(certificate.round())
+                .entry(self.current_round)
                 .or_insert_with(Vec::new)
                 .push(certificate.clone());
             debug!(
