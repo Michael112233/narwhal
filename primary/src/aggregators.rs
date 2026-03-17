@@ -120,7 +120,7 @@ impl CertificatesAggregator {
         if certificate.round() == self.expected_round {
             self.certificates.push(certificate.digest());
             self.weight += committee.stake(&origin);
-            if current_round % committee.solid_step_length() == 1 && current_round > 1 {
+            if current_round % committee.solid_step_length() == 1 && expected_round > 1 {
                 self.cert_instance.push(certificate.clone());
                 // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
             }
@@ -128,7 +128,7 @@ impl CertificatesAggregator {
         } else if certificate.round() >= weak_start && certificate.round() < self.expected_round {
             self.certificates.push(certificate.digest());
             self.weak_certificates.push(certificate.digest());
-            if current_round % committee.solid_step_length() == 1 && current_round > 1 {
+            if current_round % committee.solid_step_length() == 1 && expected_round > 1 {
                 // self.weight += committee.stake(&origin);
                 self.cert_instance.push(certificate.clone());
                 // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
@@ -142,7 +142,7 @@ impl CertificatesAggregator {
         );
 
         let threshold = committee.processing_threshold(current_round);
-        let is_solid_step = current_round % committee.solid_step_length() == 1 && current_round > 1;
+        let is_solid_step = current_round % committee.solid_step_length() == 1 && expected_round > 1;
         debug!(
             "Advance to round {}: require weight >= {}, solid_step={})",
             current_round, threshold, is_solid_step
