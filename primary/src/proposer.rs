@@ -7,7 +7,7 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
@@ -38,8 +38,12 @@ pub struct Proposer {
 
     /// The current round of the dag.
     round: Round,
+    /// The last round for which this node has already created a header.
+    last_proposed_round: Round,
     /// Holds the certificates' ids waiting to be included in the next header.
     last_parents: Vec<Digest>,
+    /// Parents received ahead of time, keyed by the next round they unlock.
+    pending_parents: HashMap<Round, Vec<Digest>>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -84,7 +88,9 @@ impl Proposer {
                 rx_workers,
                 tx_core,
                 round: 1,
+                last_proposed_round: 0,
                 last_parents: genesis,
+                pending_parents: HashMap::new(),
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 solid_step_length,
@@ -147,6 +153,7 @@ impl Proposer {
             .send(header)
             .await
             .expect("Failed to send header");
+        self.last_proposed_round = self.round;
     }
 
     // Main loop listening to incoming messages.
@@ -159,6 +166,14 @@ impl Proposer {
         let mut write_enough_digests = false;   
 
         loop {
+            if self.last_proposed_round >= self.round {
+                if let Some(parents) = self.pending_parents.remove(&(self.round + 1)) {
+                    self.round += 1;
+                    self.last_parents = parents;
+                    debug!("Dag moved to round {} from buffered parents", self.round);
+                }
+            }
+
             // Check if we can propose a new header. We propose a new header when one of the following
             // conditions is met:
             // 1. We have a quorum of certificates from the previous round and enough batches' digests;
@@ -167,6 +182,7 @@ impl Proposer {
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
+            let must_propose_bootstrap_round = self.round == 1 && self.last_proposed_round == 0;
             if enough_parents && !write_enough_parent {
                 debug!("We have enough parents to propose a new header");
                 write_enough_parent = true;
@@ -175,7 +191,7 @@ impl Proposer {
                 debug!("We have enough digests to propose a new header");
                 write_enough_digests = true;
             }
-            if (timer_expired || enough_digests) && enough_parents {
+            if (timer_expired || enough_digests || must_propose_bootstrap_round) && enough_parents {
                 write_enough_parent = false;
                 write_enough_digests = false;
                 if timer_expired {
@@ -193,18 +209,56 @@ impl Proposer {
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
-                    if round < self.round {
-                        debug!("Received header for round {} but we are at round {}", round, self.round);
+                    let next_round = round + 1;
+                    if next_round < self.round {
+                        debug!("Received stale parents for round {} but we are at round {}", round, self.round);
                         continue;
                     }
 
-                    // Advance to the next round.
-                    self.round = round + 1;
-                    // self.round = std::cmp::max(self.round, round) + 1;
-                    debug!("Dag moved to round {}", self.round);
+                    // If we have not proposed this round yet, keep accepting updated parents
+                    // for this exact round. This lets late weak-edge certificates refresh
+                    // the parent set before the header is created.
+                    if next_round == self.round {
+                        if self.last_proposed_round < self.round {
+                            debug!(
+                                "Refreshing parents for current round {} before proposal (old={}, new={})",
+                                self.round,
+                                self.last_parents.len(),
+                                parents.len()
+                            );
+                            self.last_parents = parents;
+                        } else {
+                            debug!(
+                                "Received stale parents for current round {} after proposal",
+                                self.round
+                            );
+                        }
+                        continue;
+                    }
 
-                    // Signal that we have enough parent certificates to propose a new header.
-                    self.last_parents = parents;
+                    // Do not skip rounds: only advance by one round after we already proposed
+                    // the current round. Cache out-of-order future parents.
+                    if next_round == self.round + 1 && self.last_proposed_round >= self.round {
+                        self.round = next_round;
+                        debug!("Dag moved to round {}", self.round);
+                        self.last_parents = parents;
+                    } else {
+                        debug!(
+                            "Buffering parents for future round {} (current round {}, last proposed round {})",
+                            next_round,
+                            self.round,
+                            self.last_proposed_round
+                        );
+                        match self.pending_parents.get_mut(&next_round) {
+                            Some(existing) if parents.len() > existing.len() => {
+                                *existing = parents;
+                            }
+                            None => {
+                                self.pending_parents.insert(next_round, parents);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     self.payload_size += digest.size();
