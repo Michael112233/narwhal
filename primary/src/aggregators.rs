@@ -101,10 +101,12 @@ impl CertificatesAggregator {
     ) -> DagResult<Option<Vec<Digest>>> {
         let origin = certificate.origin();
 
-        // Ensure it is the first time this authority votes.
-        if !self.used.insert(origin) {
+        // Ensure it is the first time this authority votes as a strong edge.
+        if certificate.round() == self.expected_round && !self.used.insert(origin) {
             return Ok(None);
         }
+
+        // Ensure the certificate is in the solid step range.
         let current_round = self.expected_round + 1;
         let step_id = (current_round - 1) % committee.solid_step_length();
         let weak_start: Round;
@@ -114,6 +116,7 @@ impl CertificatesAggregator {
             weak_start = current_round - step_id;
         }
 
+        // Add the certificate to the appropriate list.
         if certificate.round() == self.expected_round {
             self.certificates.push(certificate.digest());
             if current_round % committee.solid_step_length() == 0 {

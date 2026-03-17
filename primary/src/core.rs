@@ -435,15 +435,15 @@ impl Core {
 
         // Check if we have enough certificates to enter a new dag round and propose a header.
         // Older certificates are attached as weak edges to the currently ongoing round.
-        // let target_round = certificate.round();
-        let target_round = self.current_round;
+        let target_round = certificate.round();
+        // let target_round = self.current_round;
         if let Some(parents) = self
             .certificates_aggregators
             .entry(target_round)
             .or_insert_with(|| Box::new(CertificatesAggregator::new(target_round)))
             .append(certificate.clone(), &self.committee)?
         {
-            self.current_round += 1;
+            // self.current_round += 1;
             // Send it to the `Proposer`.
             self.tx_proposer
                 .send((parents, target_round))
