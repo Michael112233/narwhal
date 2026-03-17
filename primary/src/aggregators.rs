@@ -119,7 +119,6 @@ impl CertificatesAggregator {
         // Add the certificate to the appropriate list.
         if certificate.round() == self.expected_round {
             self.certificates.push(certificate.digest());
-            self.weight += committee.stake(&origin);
             if committee.is_solid_step(current_round) {
                 self.cert_instance.push(certificate.clone());
                 // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
