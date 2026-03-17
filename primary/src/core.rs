@@ -64,6 +64,8 @@ pub struct Core {
     votes_aggregators: HashMap<Digest, VotesAggregator>,
     /// Aggregates certificates to use as parents for new headers.
     certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>,
+    /// Future certificates buffered until `current_round` catches up.
+    pending_certificates: HashMap<Round, Vec<Certificate>>,
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
@@ -116,6 +118,7 @@ impl Core {
                 pending_headers: HashMap::with_capacity(2 * gc_depth as usize),
                 votes_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
+                pending_certificates: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
             }
@@ -454,21 +457,80 @@ impl Core {
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
         // Check if we have enough certificates to enter a new dag round and propose a header.
-        // Older certificates are attached as weak edges to the currently ongoing round.
-        let target_round = certificate.round();
-        // let target_round = self.current_round;
-        if let Some(parents) = self
-            .certificates_aggregators
-            .entry(target_round)
-            .or_insert_with(|| Box::new(CertificatesAggregator::new(target_round)))
-            .append(certificate.clone(), &self.committee)?
+        // Use the core's current_round as the single active aggregation round.
+        // Older certificates can still be attached as weak edges by the aggregator.
+        if certificate.round() > self.current_round {
+            self.pending_certificates
+                .entry(certificate.round())
+                .or_insert_with(Vec::new)
+                .push(certificate.clone());
+            debug!(
+                "Buffered future certificate {} (round {}) while current_round={}",
+                certificate.header.id,
+                certificate.round(),
+                self.current_round
+            );
+        } else {
+            let current_round = self.current_round;
+            if let Some(parents) = self
+                .certificates_aggregators
+                .entry(current_round)
+                .or_insert_with(|| Box::new(CertificatesAggregator::new(current_round)))
+                .append(certificate.clone(), &self.committee)?
         {
-            // self.current_round += 1;
-            // Send it to the `Proposer`.
-            self.tx_proposer
-                .send((parents, target_round))
-                .await
-                .expect("Failed to send certificate");
+                let target_round = self.current_round;
+                self.current_round += 1;
+                self.tx_proposer
+                    .send((parents, target_round))
+                    .await
+                    .expect("Failed to send certificate");
+                debug!("Core advanced current_round to {}", self.current_round);
+
+                // Replay buffered certificates that are now <= current_round.
+                loop {
+                    let mut progressed = false;
+                    let mut replay_rounds: Vec<Round> = self
+                        .pending_certificates
+                        .keys()
+                        .cloned()
+                        .filter(|r| *r <= self.current_round)
+                        .collect();
+                    replay_rounds.sort_unstable();
+                    if replay_rounds.is_empty() {
+                        break;
+                    }
+                    for round in replay_rounds {
+                        if let Some(buffered) = self.pending_certificates.remove(&round) {
+                            for buffered_cert in buffered {
+                                let replay_current_round = self.current_round;
+                                if let Some(parents) = self
+                                    .certificates_aggregators
+                                    .entry(replay_current_round)
+                                    .or_insert_with(|| {
+                                        Box::new(CertificatesAggregator::new(replay_current_round))
+                                    })
+                                    .append(buffered_cert.clone(), &self.committee)?
+                                {
+                                    let target_round = self.current_round;
+                                    self.current_round += 1;
+                                    self.tx_proposer
+                                        .send((parents, target_round))
+                                        .await
+                                        .expect("Failed to send certificate");
+                                    debug!(
+                                        "Core advanced current_round to {} (replay)",
+                                        self.current_round
+                                    );
+                                    progressed = true;
+                                }
+                            }
+                        }
+                    }
+                    if !progressed {
+                        break;
+                    }
+                }
+            }
         }
 
         // Debug: resolve each solid_step_vertex in the merge to [round, node_id].
@@ -693,6 +755,7 @@ impl Core {
                 self.processing.retain(|k, _| k >= &gc_round);
                 self.certificates_aggregators.retain(|k, _| k >= &gc_round);
                 self.cancel_handlers.retain(|k, _| k >= &gc_round);
+                self.pending_certificates.retain(|k, _| k >= &gc_round);
                 self.pending_headers.retain(|_, h| h.round >= gc_round);
                 let active_header_ids: HashSet<Digest> =
                     self.pending_headers.keys().cloned().collect();
