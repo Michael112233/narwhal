@@ -217,7 +217,7 @@ impl Core {
         // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
         let round = header.round as u64;
         let solid_step_length = self.committee.solid_step_length();
-        let is_solid_step = round % solid_step_length == 0 && round > 1;
+        let is_solid_step = self.committee.is_solid_step(round);
 
         let mut stake = 0u64;
         let mut solid_step_union = HashSet::new();

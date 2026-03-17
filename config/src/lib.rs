@@ -184,7 +184,7 @@ impl Committee {
     pub fn processing_threshold(&self, current_round: u64) -> Stake {
         // Apart from the quorum threshold, this is specially for processing headers.
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        if current_round % self.solid_step_length() as u64 == 1 && current_round > 1 {
+        if self.is_solid_step(current_round) {
             return self.coverage as Stake;
             // return (total_votes + 2) / 3;
         } else {
@@ -278,6 +278,11 @@ impl Committee {
     /// Returns the length of the solid step.
     pub fn solid_step_length(&self) -> u64 {
         (self.sigma + 1) as u64
+    }
+
+    /// Returns whether the provided round is the first round of a solid step.
+    pub fn is_solid_step(&self, round: u64) -> bool {
+        round > 1 && round % self.solid_step_length() == 1
     }
 
 }
