@@ -182,7 +182,10 @@ impl Proposer {
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
-            let must_propose_bootstrap_round = self.round == 1 && self.last_proposed_round == 0;
+            // For the first round of every solid step, do not block on payload/timer:
+            // as soon as parents are available, produce the header.
+            let must_propose_solid_step_first_round =
+                self.round % self.solid_step_length == 1 && self.last_proposed_round < self.round;
             if enough_parents && !write_enough_parent {
                 debug!("We have enough parents to propose a new header");
                 write_enough_parent = true;
@@ -191,7 +194,7 @@ impl Proposer {
                 debug!("We have enough digests to propose a new header");
                 write_enough_digests = true;
             }
-            if (timer_expired || enough_digests || must_propose_bootstrap_round) && enough_parents {
+            if (timer_expired || enough_digests || must_propose_solid_step_first_round) && enough_parents {
                 write_enough_parent = false;
                 write_enough_digests = false;
                 if timer_expired {
