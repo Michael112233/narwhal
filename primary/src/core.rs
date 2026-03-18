@@ -460,8 +460,9 @@ impl Core {
         // Use the core's current_round as the single active aggregation round.
         // Older certificates can still be attached as weak edges by the aggregator.
         if certificate.round() > self.current_round {
+            let cert_round = certificate.round();
             self.pending_certificates
-                .entry(self.current_round)
+                .entry(cert_round)
                 .or_insert_with(Vec::new)
                 .push(certificate.clone());
             debug!(

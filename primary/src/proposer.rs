@@ -251,13 +251,18 @@ impl Proposer {
                     // the parent set before the header is created.
                     if next_round == self.round {
                         if self.last_proposed_round < self.round {
+                            let old_len = self.last_parents.len();
+                            let mut merged: HashSet<Digest> =
+                                self.last_parents.drain(..).collect();
+                            merged.extend(parents.into_iter());
+                            let merged_len = merged.len();
                             debug!(
-                                "Refreshing parents for current round {} before proposal (old={}, new={})",
+                                "Refreshing parents for current round {} before proposal (old={}, merged={})",
                                 self.round,
-                                self.last_parents.len(),
-                                parents.len()
+                                old_len,
+                                merged_len
                             );
-                            self.last_parents = parents;
+                            self.last_parents = merged.into_iter().collect();
                         } else {
                             debug!(
                                 "Received stale parents for current round {} after proposal",
@@ -272,7 +277,9 @@ impl Proposer {
                     if next_round == self.round + 1 && self.last_proposed_round >= self.round {
                         self.round = next_round;
                         debug!("Dag moved to round {}", self.round);
-                        self.last_parents = parents;
+                        let mut merged: HashSet<Digest> = self.last_parents.drain(..).collect();
+                        merged.extend(parents.into_iter());
+                        self.last_parents = merged.into_iter().collect();
                     } else {
                         debug!(
                             "Buffering parents for future round {} (current round {}, last proposed round {})",
@@ -281,13 +288,14 @@ impl Proposer {
                             self.last_proposed_round
                         );
                         match self.pending_parents.get_mut(&next_round) {
-                            Some(existing) if parents.len() > existing.len() => {
-                                *existing = parents;
+                            Some(existing) => {
+                                let mut merged: HashSet<Digest> = existing.drain(..).collect();
+                                merged.extend(parents.into_iter());
+                                *existing = merged.into_iter().collect();
                             }
                             None => {
                                 self.pending_parents.insert(next_round, parents);
                             }
-                            _ => {}
                         }
                     }
                 }
