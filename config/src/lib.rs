@@ -282,7 +282,7 @@ impl Committee {
 
     /// Returns whether the provided round is the first round of a solid step.
     pub fn is_solid_step(&self, round: u64) -> bool {
-        round > 1 && round % self.solid_step_length() == 1
+        round > 1 && (round - 1) % self.solid_step_length() == 0
     }
 
 }

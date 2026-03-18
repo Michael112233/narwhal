@@ -134,7 +134,7 @@ impl Proposer {
 
         // Store the nodes which can be linked to in the first round
         debug!("the number of the parents is {}", header.parents.len());
-        if self.round % self.solid_step_length == 1 {
+        if self.round > 1 && (self.round - 1) % self.solid_step_length == 0 {
             let mut vertices: HashSet<Digest> = HashSet::new();
             vertices.insert(header.id.clone());
             header.store_solid_step_vertex(vertices);
@@ -194,8 +194,9 @@ impl Proposer {
             let timer_expired = timer.is_elapsed();
             // For the first round of every solid step, wait a short micro-window after
             // parents become ready. This gives late certificates a chance to be included.
-            let is_critical_round =
-                self.round % self.solid_step_length == 1 && self.last_proposed_round < self.round;
+            let is_critical_round = self.round > 1
+                && (self.round - 1) % self.solid_step_length == 0
+                && self.last_proposed_round < self.round;
             if is_critical_round && enough_parents {
                 if self.critical_round_ready_since.is_none() {
                     self.critical_round_ready_since = Some(Instant::now());
