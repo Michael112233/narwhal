@@ -155,7 +155,14 @@ impl Consensus {
                 .get(&support_round)
                 .expect("We should have the whole history by now")
                 .values()
-                .filter(|(_, x)| x.header.solid_step_vertices.contains(&leader_digest))
+                .filter(|(_, x)| {
+                    if !x.header.solid_step_vertices_merged.is_empty() {
+                        x.header.solid_step_vertices_merged.contains(&leader_digest)
+                    } else {
+                        // Backward-compatible fallback for legacy headers.
+                        x.header.solid_step_vertices.contains(&leader_digest)
+                    }
+                })
                 .map(|(_, x)| self.committee.stake(&x.origin()))
                 .sum();
             // If it is the case, we can commit the leader. But first, we need to recursively go back to
