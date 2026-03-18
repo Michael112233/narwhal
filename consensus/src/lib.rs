@@ -242,7 +242,7 @@ impl Consensus {
             };
 
             // Check whether there is a path between the last two leaders.
-            if self.linked(leader, prev_leader, &state.dag) {
+            if self.linked(leader, prev_leader, &state) {
                 to_commit.push(prev_leader.clone());
                 leader = prev_leader;
             }
@@ -250,19 +250,53 @@ impl Consensus {
         to_commit
     }
 
-    /// Checks if there is a path between two leaders.
-    fn linked(&self, leader: &Certificate, prev_leader: &Certificate, dag: &Dag) -> bool {
-        let mut parents = vec![leader];
-        for r in (prev_leader.round()..leader.round()).rev() {
-            parents = dag
-                .get(&(r))
-                .expect("We should have the whole history by now")
-                .values()
-                .filter(|(digest, _)| parents.iter().any(|x| x.header.parents.contains(digest)))
-                .map(|(_, certificate)| certificate)
-                .collect();
+    /// Find a parent certificate by digest in any ancestor round (< child_round).
+    fn find_parent_certificate<'a>(
+        &self,
+        state: &'a State,
+        child_round: Round,
+        parent_digest: &Digest,
+    ) -> Option<&'a (Digest, Certificate)> {
+        if child_round <= 1 {
+            return None;
         }
-        parents.contains(&prev_leader)
+        for round in (1..child_round).rev() {
+            if let Some(found) = state
+                .dag
+                .get(&round)
+                .and_then(|certs| certs.values().find(|(digest, _)| digest == parent_digest))
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Checks if there is a path between two leaders.
+    /// Unlike the original implementation, this traversal follows weak edges too.
+    fn linked(&self, leader: &Certificate, prev_leader: &Certificate, state: &State) -> bool {
+        let target = prev_leader.digest();
+        let mut stack = vec![leader];
+        let mut visited = HashSet::new();
+
+        while let Some(current) = stack.pop() {
+            let current_digest = current.digest();
+            if !visited.insert(current_digest.clone()) {
+                continue;
+            }
+            if current_digest == target {
+                return true;
+            }
+
+            for parent in &current.header.parents {
+                if let Some((_, parent_cert)) =
+                    self.find_parent_certificate(state, current.round(), parent)
+                {
+                    stack.push(parent_cert);
+                }
+            }
+        }
+        false
     }
 
     /// Flatten the dag referenced by the input certificate. This is a classic depth-first search (pre-order):
@@ -270,33 +304,29 @@ impl Consensus {
     fn order_dag(&self, leader: &Certificate, state: &State) -> Vec<Certificate> {
         debug!("Processing sub-dag of {:?}", leader);
         let mut ordered = Vec::new();
-        let mut already_ordered = HashSet::new();
+        let mut already_ordered: HashSet<Digest> = HashSet::new();
 
         let mut buffer = vec![leader];
         while let Some(x) = buffer.pop() {
             debug!("Sequencing {:?}", x);
             ordered.push(x.clone());
             for parent in &x.header.parents {
-                let (digest, certificate) = match state
-                    .dag
-                    .get(&(x.round() - 1))
-                    .map(|x| x.values().find(|(x, _)| x == parent))
-                    .flatten()
+                let (digest, certificate) = match self.find_parent_certificate(state, x.round(), parent)
                 {
                     Some(x) => x,
-                    None => continue, // We already ordered or GC up to here.
+                    None => continue, // Parent already GC'ed or not in local DAG.
                 };
 
                 // We skip the certificate if we (1) already processed it or (2) we reached a round that we already
                 // committed for this authority.
-                let mut skip = already_ordered.contains(&digest);
+                let mut skip = already_ordered.contains(digest);
                 skip |= state
                     .last_committed
                     .get(&certificate.origin())
                     .map_or_else(|| false, |r| r == &certificate.round());
                 if !skip {
                     buffer.push(certificate);
-                    already_ordered.insert(digest);
+                    already_ordered.insert(digest.clone());
                 }
             }
         }

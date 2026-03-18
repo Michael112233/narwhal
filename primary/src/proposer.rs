@@ -50,6 +50,10 @@ pub struct Proposer {
     payload_size: usize,
     /// The solid step length.
     solid_step_length: u64,
+    /// Extra delay for critical rounds to let late certificates arrive.
+    critical_round_delay: Duration,
+    /// When the current critical round first became parent-ready.
+    critical_round_ready_since: Option<Instant>,
     /// The persistent storage.
     store: Store,
 }
@@ -76,6 +80,10 @@ impl Proposer {
             .map(|x| x.digest())
             .collect();
         let solid_step_length = committee.solid_step_length() as u64;
+        let critical_round_delay_ms = std::env::var("NARWHAL_PROPOSER_CRITICAL_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(20);
 
         tokio::spawn(async move {
             Self {
@@ -94,6 +102,8 @@ impl Proposer {
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 solid_step_length,
+                critical_round_delay: Duration::from_millis(critical_round_delay_ms),
+                critical_round_ready_since: None,
                 store,
             }
             .run()
@@ -182,10 +192,21 @@ impl Proposer {
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
-            // For the first round of every solid step, do not block on payload/timer:
-            // as soon as parents are available, produce the header.
-            let must_propose_solid_step_first_round =
+            // For the first round of every solid step, wait a short micro-window after
+            // parents become ready. This gives late certificates a chance to be included.
+            let is_critical_round =
                 self.round % self.solid_step_length == 1 && self.last_proposed_round < self.round;
+            if is_critical_round && enough_parents {
+                if self.critical_round_ready_since.is_none() {
+                    self.critical_round_ready_since = Some(Instant::now());
+                }
+            } else {
+                self.critical_round_ready_since = None;
+            }
+            let critical_delay_elapsed = is_critical_round
+                && self
+                    .critical_round_ready_since
+                    .map_or(false, |t| t.elapsed() >= self.critical_round_delay);
             if enough_parents && !write_enough_parent {
                 debug!("We have enough parents to propose a new header");
                 write_enough_parent = true;
@@ -194,16 +215,23 @@ impl Proposer {
                 debug!("We have enough digests to propose a new header");
                 write_enough_digests = true;
             }
-            if (timer_expired || enough_digests || must_propose_solid_step_first_round) && enough_parents {
+            if (timer_expired || enough_digests || critical_delay_elapsed) && enough_parents {
                 write_enough_parent = false;
                 write_enough_digests = false;
                 if timer_expired {
                     debug!("The timer has expired");
                 }
+                if is_critical_round && !timer_expired && !enough_digests {
+                    debug!(
+                        "Critical round {} delayed by {:?} before proposal",
+                        self.round, self.critical_round_delay
+                    );
+                }
                 
                 // Make a new header.
                 self.make_header().await;
                 self.payload_size = 0;
+                self.critical_round_ready_since = None;
 
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
