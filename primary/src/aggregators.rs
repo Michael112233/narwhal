@@ -108,13 +108,11 @@ impl CertificatesAggregator {
 
         // Ensure the certificate is in the solid step range.
         let current_round = self.expected_round + 1;
-        let step_id = (current_round - 1) % committee.solid_step_length();
-        let weak_start: Round;
-        if step_id == 0 {
-            weak_start = current_round - committee.solid_step_length();
-        } else {
-            weak_start = current_round - step_id;
-        }
+        // If current_round is the i-th round of a solid step, allow weak edges
+        // back to (current_round - i).
+        let step_len = committee.solid_step_length();
+        let i: Round = ((current_round - 1) % step_len) + 1;
+        let weak_start: Round = current_round.saturating_sub(i);
 
         // Add the certificate to the appropriate list.
         if certificate.round() == self.expected_round {
