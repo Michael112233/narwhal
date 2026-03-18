@@ -133,16 +133,12 @@ impl Proposer {
         debug!("Created {:?}", header);
 
         // Maintain solid_step_vertices:
-        // - round 1 uses all parents as bootstrap solid-step vertices,
-        // - solid-step initialization rounds reset to the current header,
-        // - other rounds merge from parent certificates.
+        // - solid-step initialization rounds reset to the current header ([r,x]),
+        // - all other rounds merge from parent certificates.
         debug!("the number of the parents is {}", header.parents.len());
-        let is_solid_step_first_round =
-            self.round > 1 && (self.round - 1) % self.solid_step_length == 0;
-        if self.round == 1 {
-            let vertices: HashSet<Digest> = header.parents.iter().cloned().collect();
-            header.store_solid_step_vertex(vertices);
-        } else if is_solid_step_first_round {
+        let is_solid_step_init_round =
+            self.round == 1 || (self.round > 1 && self.round % self.solid_step_length == 0);
+        if is_solid_step_init_round {
             let mut vertices: HashSet<Digest> = HashSet::new();
             vertices.insert(header.id.clone());
             header.store_solid_step_vertex(vertices);
@@ -156,7 +152,17 @@ impl Proposer {
                 // stall header dissemination.
                 if let Ok(Some(bytes)) = self.store.read(parent.to_vec()).await {
                     if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                        merged.extend(cert.header.solid_step_vertices);
+                        let parent_round = cert.round();
+                        let parent_id = cert.header.id.clone();
+                        merged.extend(cert.header.solid_step_vertices.iter().cloned());
+                        // If this parent is a weak edge and it is itself an init-round cert [r,x],
+                        // include it directly in solid_step_vertices.
+                        let is_weak = parent_round + 1 != self.round;
+                        let parent_is_init_round =
+                            parent_round == 1 || (parent_round > 1 && parent_round % self.solid_step_length == 0);
+                        if is_weak && parent_is_init_round {
+                            merged.insert(parent_id);
+                        }
                     }
                 }
             }
@@ -209,7 +215,7 @@ impl Proposer {
             // For the first round of every solid step, wait a short micro-window after
             // parents become ready. This gives late certificates a chance to be included.
             let is_critical_round = self.round > 1
-                && (self.round - 1) % self.solid_step_length == 0
+                && self.round % self.solid_step_length == 0
                 && self.last_proposed_round < self.round;
             if is_critical_round && enough_parents {
                 if self.critical_round_ready_since.is_none() {
