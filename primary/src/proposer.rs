@@ -133,15 +133,14 @@ impl Proposer {
         debug!("Created {:?}", header);
 
         // Maintain solid_step_vertices:
-        // - round 1 performs bootstrap initialization only (not treated as a solid-step round),
-        // - solid-step first rounds reset to current header,
+        // - round 1 uses all parents as bootstrap solid-step vertices,
+        // - solid-step initialization rounds reset to the current header,
         // - other rounds merge from parent certificates.
         debug!("the number of the parents is {}", header.parents.len());
         let is_solid_step_first_round =
             self.round > 1 && (self.round - 1) % self.solid_step_length == 0;
         if self.round == 1 {
-            let mut vertices: HashSet<Digest> = HashSet::new();
-            vertices.insert(header.id.clone());
+            let vertices: HashSet<Digest> = header.parents.iter().cloned().collect();
             header.store_solid_step_vertex(vertices);
         } else if is_solid_step_first_round {
             let mut vertices: HashSet<Digest> = HashSet::new();

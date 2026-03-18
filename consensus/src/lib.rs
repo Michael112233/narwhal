@@ -51,12 +51,12 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        for (name, round) in &self.last_committed {
-            self.dag.retain(|r, authorities| {
-                authorities.retain(|n, _| n != name || r >= round);
-                !authorities.is_empty() && r + gc_depth >= last_committed_round
-            });
-        }
+        // for (name, round) in &self.last_committed {
+        //     self.dag.retain(|r, authorities| {
+        //         authorities.retain(|n, _| n != name || r >= round);
+        //         !authorities.is_empty() && r + gc_depth >= last_committed_round
+        //     });
+        // }
     }
 }
 
@@ -116,11 +116,11 @@ impl Consensus {
                 .or_insert_with(HashMap::new)
                 .insert(certificate.origin(), (certificate.digest(), certificate));
 
-            // self.visualize_dag(&state, round);
+            self.visualize_dag(&state, round);
 
             // Try to order the dag to commit. Start from the highest round for which we have at least
             // 2f+1 certificates. This is because we need them to reveal the common coin.
-            let r = round - 1;
+            let r = round - self.committee.solid_step_length();
 
             // We only elect leaders for rounds such that round % solid_wave_length == 1.
             if r % self.committee.solid_wave_length() != 0
@@ -145,13 +145,17 @@ impl Consensus {
                 }
             };
 
-            // Check if the leader has f+1 support from its children (ie. round r-1).
+            // Check if the leader has f+1 support from the solid-step projection round:
+            // support_round = r - solid_wave_length + solid_step_length.
+            // A certificate supports the leader if its solid_step_vertices contains leader_digest.
+            let support_round =
+                r - self.committee.solid_wave_length() + self.committee.solid_step_length();
             let stake: Stake = state
                 .dag
-                .get(&(r - self.committee.solid_wave_length() + 1))
+                .get(&support_round)
                 .expect("We should have the whole history by now")
                 .values()
-                .filter(|(_, x)| x.header.parents.contains(&leader_digest))
+                .filter(|(_, x)| x.header.solid_step_vertices.contains(&leader_digest))
                 .map(|(_, x)| self.committee.stake(&x.origin()))
                 .sum();
             // If it is the case, we can commit the leader. But first, we need to recursively go back to
