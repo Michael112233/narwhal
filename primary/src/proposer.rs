@@ -132,9 +132,18 @@ impl Proposer {
         );
         debug!("Created {:?}", header);
 
-        // Store the nodes which can be linked to in the first round
+        // Maintain solid_step_vertices:
+        // - round 1 performs bootstrap initialization only (not treated as a solid-step round),
+        // - solid-step first rounds reset to current header,
+        // - other rounds merge from parent certificates.
         debug!("the number of the parents is {}", header.parents.len());
-        if self.round > 1 && (self.round - 1) % self.solid_step_length == 0 {
+        let is_solid_step_first_round =
+            self.round > 1 && (self.round - 1) % self.solid_step_length == 0;
+        if self.round == 1 {
+            let mut vertices: HashSet<Digest> = HashSet::new();
+            vertices.insert(header.id.clone());
+            header.store_solid_step_vertex(vertices);
+        } else if is_solid_step_first_round {
             let mut vertices: HashSet<Digest> = HashSet::new();
             vertices.insert(header.id.clone());
             header.store_solid_step_vertex(vertices);
@@ -143,9 +152,14 @@ impl Proposer {
             let mut merged = HashSet::new();
 
             for parent in parents {
-                let bytes = self.store.notify_read(parent.to_vec()).await.unwrap();
-                let cert: Certificate = bincode::deserialize(&bytes).unwrap();
-                merged.extend(cert.header.solid_step_vertices);
+                // Never block proposer waiting on parent cert materialization here.
+                // Missing parents can happen at bootstrap (genesis references) and should not
+                // stall header dissemination.
+                if let Ok(Some(bytes)) = self.store.read(parent.to_vec()).await {
+                    if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
+                        merged.extend(cert.header.solid_step_vertices);
+                    }
+                }
             }
 
             header.store_solid_step_vertex(merged);
@@ -192,6 +206,7 @@ impl Proposer {
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
+            let bootstrap_round_ready = self.round == 1 && self.last_proposed_round < self.round;
             // For the first round of every solid step, wait a short micro-window after
             // parents become ready. This gives late certificates a chance to be included.
             let is_critical_round = self.round > 1
@@ -216,7 +231,9 @@ impl Proposer {
                 debug!("We have enough digests to propose a new header");
                 write_enough_digests = true;
             }
-            if (timer_expired || enough_digests || critical_delay_elapsed) && enough_parents {
+            if (bootstrap_round_ready || timer_expired || enough_digests || critical_delay_elapsed)
+                && enough_parents
+            {
                 write_enough_parent = false;
                 write_enough_digests = false;
                 if timer_expired {
