@@ -136,6 +136,32 @@ impl Proposer {
         // - solid-step initialization rounds reset to the current header ([r,x]),
         // - all other rounds merge from parent certificates.
         debug!("the number of the parents is {}", header.parents.len());
+        let parents: Vec<_> = header.parents.iter().cloned().collect();
+        let mut merged = HashSet::new();
+
+        for parent in parents {
+            // Never block proposer waiting on parent cert materialization here.
+            // Missing parents can happen at bootstrap (genesis references) and should not
+            // stall header dissemination.
+            if let Ok(Some(bytes)) = self.store.read(parent.to_vec()).await {
+                if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
+                    let parent_round = cert.round();
+                    let parent_id = cert.header.id.clone();
+                    merged.extend(cert.header.solid_step_vertices.iter().cloned());
+                    // If this parent is a weak edge and it is itself an init-round cert [r,x],
+                    // include it directly in solid_step_vertices.
+                    let is_weak = parent_round + 1 != self.round;
+                    let parent_is_init_round =
+                        parent_round == 1 || (parent_round > 1 && parent_round % self.solid_step_length == 0);
+                    if is_weak && parent_is_init_round {
+                        merged.insert(parent_id);
+                    }
+                }
+            }
+        }
+        // Preserve parent-merge snapshot for consensus validity checks.
+        header.store_solid_step_merged_vertices(merged.clone());
+
         let is_solid_step_init_round =
             self.round == 1 || (self.round > 1 && self.round % self.solid_step_length == 0);
         if is_solid_step_init_round {
@@ -143,30 +169,6 @@ impl Proposer {
             vertices.insert(header.id.clone());
             header.store_solid_step_vertex(vertices);
         } else {
-            let parents: Vec<_> = header.parents.iter().cloned().collect();
-            let mut merged = HashSet::new();
-
-            for parent in parents {
-                // Never block proposer waiting on parent cert materialization here.
-                // Missing parents can happen at bootstrap (genesis references) and should not
-                // stall header dissemination.
-                if let Ok(Some(bytes)) = self.store.read(parent.to_vec()).await {
-                    if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                        let parent_round = cert.round();
-                        let parent_id = cert.header.id.clone();
-                        merged.extend(cert.header.solid_step_vertices.iter().cloned());
-                        // If this parent is a weak edge and it is itself an init-round cert [r,x],
-                        // include it directly in solid_step_vertices.
-                        let is_weak = parent_round + 1 != self.round;
-                        let parent_is_init_round =
-                            parent_round == 1 || (parent_round > 1 && parent_round % self.solid_step_length == 0);
-                        if is_weak && parent_is_init_round {
-                            merged.insert(parent_id);
-                        }
-                    }
-                }
-            }
-
             header.store_solid_step_vertex(merged);
         }
         debug!("Current round: {}, The number of the solid step vertices is {}", self.round, header.solid_step_vertices.len());

@@ -20,6 +20,9 @@ pub struct Header {
     pub signature: Signature,
     /// Stores the vertices of the first round of the solid step which can be linked to
     pub solid_step_vertices: HashSet<Digest>,
+    /// Stores the merged solid-step vertices computed from parents at header creation time.
+    /// This preserves the union even when `solid_step_vertices` is re-initialized on init rounds.
+    pub solid_step_vertices_merged: HashSet<Digest>,
 }
 
 impl Header {
@@ -38,6 +41,7 @@ impl Header {
             id: Digest::default(),
             signature: Signature::default(),
             solid_step_vertices: HashSet::new(),
+            solid_step_vertices_merged: HashSet::new(),
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -71,6 +75,10 @@ impl Header {
 
     pub fn store_solid_step_vertex(&mut self, vertices: HashSet<Digest>) {
         self.solid_step_vertices.extend(vertices);
+    }
+
+    pub fn store_solid_step_merged_vertices(&mut self, vertices: HashSet<Digest>) {
+        self.solid_step_vertices_merged.extend(vertices);
     }
 }
 
