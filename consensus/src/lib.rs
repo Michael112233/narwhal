@@ -145,9 +145,20 @@ impl Consensus {
                 }
             };
 
+            // `leader_digest` is the *certificate digest* returned by `State::dag[leader_round][leader]`.
+            // Concretely, `dag` stores `(certificate.digest(), certificate)`.
+            //
+            // `leader.header.id` is the *header digest* of the leader block itself.
+            // In contrast, `solid_step_vertices(_merged)` stored in `Header` are sets of
+            // *header ids* (they are generated/merged in the proposer from `header.id`).
+            //
+            // Validity uses the solid-step vertices stored in certificates from `support_round`,
+            // checking whether those vertices include the leader.
+            //
             // Check if the leader has f+1 support from the solid-step projection round:
             // support_round = r - solid_wave_length + solid_step_length.
-            // A certificate supports the leader if its solid_step_vertices contains leader_digest.
+            // A certificate supports the leader if its `solid_step_vertices(_merged)` contains
+            // the leader's header id (preferred) or, for backward compatibility, the leader_digest.
             let support_round =
                 r - self.committee.solid_wave_length() + self.committee.solid_step_length();
             let leader_header_id = leader.header.id.clone();
