@@ -51,12 +51,12 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        for (name, round) in &self.last_committed {
-            self.dag.retain(|r, authorities| {
-                authorities.retain(|n, _| n != name || r >= round);
-                !authorities.is_empty() && r + gc_depth >= last_committed_round
-            });
-        }
+        // for (name, round) in &self.last_committed {
+        //     self.dag.retain(|r, authorities| {
+        //         authorities.retain(|n, _| n != name || r >= round);
+        //         !authorities.is_empty() && r + gc_depth >= last_committed_round
+        //     });
+        // }
     }
 }
 
@@ -116,7 +116,7 @@ impl Consensus {
                 .or_insert_with(HashMap::new)
                 .insert(certificate.origin(), (certificate.digest(), certificate));
 
-            // self.visualize_dag(&state, round);
+            self.visualize_dag(&state, round);
 
             // Try to order the dag to commit. Start from the highest round for which we have at least
             // 2f+1 certificates. This is because we need them to reveal the common coin.
@@ -124,7 +124,7 @@ impl Consensus {
 
             // We only elect leaders for rounds such that round % solid_wave_length == 1.
             if r % self.committee.solid_wave_length() != 1
-                || r < 2 * self.committee.solid_wave_length() + 1
+                || r < 2 * self.committee.solid_wave_length()
             {
                 continue;
             }
