@@ -150,21 +150,22 @@ impl Consensus {
             // A certificate supports the leader if its solid_step_vertices contains leader_digest.
             let support_round =
                 r - self.committee.solid_wave_length() + self.committee.solid_step_length();
+            let leader_header_id = leader.header.id.clone();
             let stake: Stake = state
                 .dag
                 .get(&support_round)
                 .expect("We should have the whole history by now")
                 .values()
                 .filter(|(_, x)| {
-                    if !x.header.solid_step_vertices_merged.is_empty() {
-                        info!("Using solid_step_vertices_merged");
-                        info!("solid_step_vertices_merged: {:?}, leader_digest: {:?}", x.header.solid_step_vertices_merged, leader_digest);
-                        x.header.solid_step_vertices_merged.contains(&leader_digest)
+                    let vertices = if !x.header.solid_step_vertices_merged.is_empty() {
+                        &x.header.solid_step_vertices_merged
                     } else {
                         // Backward-compatible fallback for legacy headers.
-                        debug!("error: solid_step_vertices_merged is empty");
-                        x.header.solid_step_vertices.contains(&leader_digest)
-                    }
+                        &x.header.solid_step_vertices
+                    };
+                    // solid_step_vertices track header ids; leader_digest may be certificate digest.
+                    // Keep both checks for compatibility.
+                    vertices.contains(&leader_header_id) || vertices.contains(&leader_digest)
                 })
                 .map(|(_, x)| self.committee.stake(&x.origin()))
                 .sum();
