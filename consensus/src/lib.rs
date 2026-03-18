@@ -157,9 +157,12 @@ impl Consensus {
                 .values()
                 .filter(|(_, x)| {
                     if !x.header.solid_step_vertices_merged.is_empty() {
+                        info!("Using solid_step_vertices_merged");
+                        info!("solid_step_vertices_merged: {:?}, leader_digest: {:?}", x.header.solid_step_vertices_merged, leader_digest);
                         x.header.solid_step_vertices_merged.contains(&leader_digest)
                     } else {
                         // Backward-compatible fallback for legacy headers.
+                        debug!("error: solid_step_vertices_merged is empty");
                         x.header.solid_step_vertices.contains(&leader_digest)
                     }
                 })
