@@ -122,8 +122,10 @@ impl Consensus {
             // 2f+1 certificates. This is because we need them to reveal the common coin.
             let r = round - 1;
 
-            // We only elect leaders for even round numbers.
-            if r % self.committee.solid_wave_length() != 0 || r < 2 * self.committee.solid_wave_length() {
+            // We only elect leaders for rounds such that round % solid_wave_length == 1.
+            if r % self.committee.solid_wave_length() != 1
+                || r < 2 * self.committee.solid_wave_length() + 1
+            {
                 continue;
             }
 
