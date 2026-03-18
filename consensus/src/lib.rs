@@ -127,6 +127,8 @@ impl Consensus {
                 continue;
             }
 
+            // debug!("Current round: {}, It is time to elect the leader", r);
+
             // Get the certificate's digest of the leader of round r-2. If we already ordered this leader,
             // there is nothing to do.
             let leader_round = r - self.committee.solid_wave_length();

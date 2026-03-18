@@ -272,7 +272,7 @@ impl Committee {
 
     /// Returns the number of the solid wave.
     pub fn solid_wave_length(&self) -> u64 {
-        (self.sigma as u64) * (self.kappa as u64)
+        (self.sigma + 1) as u64 * (self.kappa as u64)
     }
 
     /// Returns the length of the solid step.
