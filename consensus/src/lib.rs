@@ -162,6 +162,37 @@ impl Consensus {
             let support_round =
                 r - self.committee.solid_wave_length() + self.committee.solid_step_length();
             let leader_header_id = leader.header.id.clone();
+            if log_enabled!(log::Level::Debug) {
+                // Map authority public keys to the same node-id scheme used by `visualize_dag`.
+                let mut author_to_node: HashMap<PublicKey, usize> = HashMap::new();
+                let mut node_counter = 0usize;
+                for (authority, _) in &self.committee.authorities {
+                    author_to_node.insert(*authority, node_counter);
+                    node_counter += 1;
+                }
+
+                let header_pos = self.find_certificate_in_dag(&state, &leader_header_id);
+                let cert_pos = self.find_certificate_in_dag(&state, &leader_digest);
+
+                debug!(
+                    "Commit validity check: r={}, leader_round={}, support_round={}. \
+leader_header_id={:?} -> {:?} (node_id={}); \
+leader_digest(cert)= {:?} -> {:?} (node_id={})",
+                    r,
+                    leader_round,
+                    support_round,
+                    leader_header_id,
+                    header_pos.as_ref().map(|(rd, _)| rd),
+                    header_pos
+                        .map(|(_, a)| author_to_node.get(&a).copied().unwrap_or(999))
+                        .unwrap_or(999),
+                    leader_digest,
+                    cert_pos.as_ref().map(|(rd, _)| rd),
+                    cert_pos
+                        .map(|(_, a)| author_to_node.get(&a).copied().unwrap_or(999))
+                        .unwrap_or(999),
+                );
+            }
             let stake: Stake = state
                 .dag
                 .get(&support_round)
