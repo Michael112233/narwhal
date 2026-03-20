@@ -1,7 +1,9 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 import subprocess
+from contextlib import suppress
 from math import ceil
 from os.path import basename, splitext
+from shutil import which
 from time import sleep
 
 from benchmark.imbalanced_rate import ZipfAllocator
@@ -15,6 +17,7 @@ class LocalBench:
     BASE_PORT = 3000
 
     def __init__(self, bench_parameters_dict, node_parameters_dict):
+        self._processes = []
         try:
             self.bench_parameters = BenchParameters(bench_parameters_dict)
             self.node_parameters = NodeParameters(node_parameters_dict)
@@ -32,13 +35,36 @@ class LocalBench:
 
     def _background_run(self, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f'{command} 2> {log_file}'
-        subprocess.run(['tmux', 'new', '-d', '-s', name, cmd], check=True)
+        cmd = f'{command} > {log_file} 2>&1'
+        if which('tmux'):
+            try:
+                subprocess.run(['tmux', 'new', '-d', '-s', name, cmd], check=True)
+                return
+            except subprocess.SubprocessError:
+                pass
+
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            start_new_session=True,
+        )
+        self._processes.append(process)
 
     def _kill_nodes(self):
         try:
-            cmd = CommandMaker.kill().split()
-            subprocess.run(cmd, stderr=subprocess.DEVNULL)
+            if self._processes:
+                for process in self._processes:
+                    with suppress(ProcessLookupError):
+                        process.terminate()
+                for process in self._processes:
+                    with suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=5)
+                self._processes = []
+
+            if which('tmux'):
+                cmd = CommandMaker.kill().split()
+                subprocess.run(cmd, stderr=subprocess.DEVNULL)
         except subprocess.SubprocessError as e:
             raise BenchError('Failed to kill testbed', e)
 
@@ -82,10 +108,12 @@ class LocalBench:
 
             # Run the clients (they will wait for the nodes to be ready).
             workers_addresses = committee.workers_addresses(self.faults)
+            client_rates = []
             if rate_type == 'balanced':
                 rate_share = ceil(rate / committee.workers())
                 for i, addresses in enumerate(workers_addresses):
                     for (id, address) in addresses:
+                        client_rates.append(rate_share)
                         cmd = CommandMaker.run_client(
                             address,
                             self.tx_size,
@@ -102,6 +130,7 @@ class LocalBench:
                 # run the clients with the generated rate
                 for i, addresses in enumerate(workers_addresses):
                     for (id, address) in addresses:
+                        client_rates.append(rates[i])
                         cmd = CommandMaker.run_client(
                             address,
                             self.tx_size,
@@ -144,7 +173,12 @@ class LocalBench:
 
             # Parse logs and return the parser.
             Print.info('Parsing logs...')
-            return LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            return LogParser.process(
+                PathMaker.logs_path(),
+                faults=self.faults,
+                default_client_size=self.tx_size,
+                default_client_rates=client_rates,
+            )
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()

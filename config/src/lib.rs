@@ -188,7 +188,7 @@ impl Committee {
             return self.coverage as Stake;
             // return (total_votes + 2) / 3;
         } else {
-            // 
+            //
             return self.reference as Stake;
         }
     }
@@ -284,7 +284,6 @@ impl Committee {
     pub fn is_solid_step(&self, round: u64) -> bool {
         round > 1 && round % self.solid_step_length() == 0
     }
-
 }
 
 #[derive(Serialize, Deserialize)]

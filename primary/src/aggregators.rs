@@ -1,8 +1,8 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote};
-use config::{Committee, Stake};
 use crate::primary::Round;
+use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use log::debug;
@@ -62,13 +62,15 @@ pub struct CertificatesAggregator {
     weight: Stake,
     certificates: Vec<Digest>,
     weak_certificates: Vec<Digest>,
-    cert_instance: Vec<Certificate>,
     used: HashSet<PublicKey>,
     has_quorum: bool,
     /// Wait for several seconds after meeting the condition
     quorum_reached_time: Option<Instant>,
     wait_duration: Duration,
-    /// Last computed union of solid_step_vertices (for debug / final_dag display).
+    /// Incremental union of valid parents' solid_step_vertices_merged on solid rounds.
+    union_vertices: HashSet<Digest>,
+    /// Last computed union of parents' solid_step_vertices_merged on solid rounds
+    /// (for debug / final_dag display).
     last_union_set: Option<Vec<Digest>>,
 }
 
@@ -79,17 +81,18 @@ impl CertificatesAggregator {
             weight: 0,
             certificates: Vec::new(),
             weak_certificates: Vec::new(),
-            cert_instance: Vec::new(),
             used: HashSet::new(),
             has_quorum: false,
             quorum_reached_time: None,
             wait_duration: Duration::from_millis(20),
+            union_vertices: HashSet::new(),
             last_union_set: None,
         }
     }
 
-    /// Returns the last computed union of solid_step_vertices (when advancing to a solid round).
-    /// Used by core to resolve digests to [round, node_id] for debug and final_dag.
+    /// Returns the last computed union of parents' solid_step_vertices_merged
+    /// (when advancing to a solid round). Used by core to resolve digests to
+    /// [round, node_id] for debug and final_dag.
     pub fn last_solid_step_union_digests(&self) -> Option<&[Digest]> {
         self.last_union_set.as_deref()
     }
@@ -106,36 +109,58 @@ impl CertificatesAggregator {
             return Ok(None);
         }
 
-        // Ensure the certificate is in the solid step range.
+        // Accept parents from the whole solid-wave window, but only the newer
+        // solid-step sub-window contributes to processing/solid-step checks.
         let current_round = self.expected_round + 1;
-        // If current_round is the i-th round of a solid step, allow weak edges
-        // back to (current_round - i).
         let step_len = committee.solid_step_length();
-        let i: Round = ((current_round - 1) % step_len) + 1;
-        let weak_start: Round = current_round.saturating_sub(i);
+        let wave_len = committee.solid_wave_length();
+        let step_index: Round = ((current_round - 1) % step_len) + 1;
+        let wave_index: Round = ((current_round - 1) % wave_len) + 1;
+        let regular_weak_start: Round = current_round.saturating_sub(step_index);
+        let commit_weak_start: Round = current_round.saturating_sub(wave_index);
 
         // Add the certificate to the appropriate list.
         if certificate.round() == self.expected_round {
             self.certificates.push(certificate.digest());
             if committee.is_solid_step(current_round) {
-                self.cert_instance.push(certificate.clone());
-                // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
+                self.union_vertices.extend(
+                    certificate
+                        .header
+                        .solid_step_vertices_merged
+                        .iter()
+                        .cloned(),
+                );
             }
             self.weight += committee.stake(&origin);
-        } else if certificate.round() >= weak_start && certificate.round() < self.expected_round {
+        } else if certificate.round() >= regular_weak_start
+            && certificate.round() < self.expected_round
+        {
             self.certificates.push(certificate.digest());
             self.weak_certificates.push(certificate.digest());
             if committee.is_solid_step(current_round) {
-                // self.weight += committee.stake(&origin);
-                self.cert_instance.push(certificate.clone());
-                // debug!("Cert instance size: {}, certificates size: {}", self.cert_instance.len(), self.certificates.len());
+                self.union_vertices.extend(
+                    certificate
+                        .header
+                        .solid_step_vertices_merged
+                        .iter()
+                        .cloned(),
+                );
             }
+        } else if certificate.round() >= commit_weak_start
+            && certificate.round() < regular_weak_start
+        {
+            self.certificates.push(certificate.digest());
+            self.weak_certificates.push(certificate.digest());
+        } else {
+            return Ok(None);
         }
         debug!(
-            "Current round: {}, weak range: [{}..={})",
+            "Current round: {}, regular weak range: [{}..={}), commit-only weak range: [{}..={})",
             current_round,
-            weak_start,
-            current_round - 1
+            regular_weak_start,
+            self.expected_round,
+            commit_weak_start,
+            regular_weak_start
         );
 
         let threshold = committee.processing_threshold(current_round);
@@ -145,20 +170,20 @@ impl CertificatesAggregator {
             current_round, threshold, is_solid_step
         );
         if is_solid_step {
-            let mut union_set: HashSet<Digest> = HashSet::new();
-            for certificate in &self.cert_instance {
-                let cert_first_round_parent: HashSet<Digest> = certificate.header.solid_step_vertices.iter().cloned().collect();
-                union_set.extend(cert_first_round_parent);
-            }
-            self.last_union_set = Some(union_set.iter().cloned().collect());
-            // self.has_quorum = (self.weight >= min_weight);
-            self.has_quorum = (union_set.len() >= committee.processing_threshold(current_round) as usize);
-            debug!("Current round: {}, The number of the solid step vertices is {}", current_round, union_set.len());
+            self.last_union_set = Some(self.union_vertices.iter().cloned().collect());
+            self.has_quorum =
+                self.union_vertices.len() >= committee.processing_threshold(current_round) as usize;
+            debug!(
+                "Current round: {}, The number of merged solid-step vertices is {}",
+                current_round,
+                self.union_vertices.len()
+            );
         } else {
-            self.last_union_set = None;
-            // self.has_quorum = (self.weight >= min_weight);
-            self.has_quorum = (self.weight >= committee.processing_threshold(current_round));
-            debug!("Current round: {}, The weight is {}, self_has_quorum: {}", current_round, self.weight, self.has_quorum);
+            self.has_quorum = self.weight >= committee.processing_threshold(current_round);
+            debug!(
+                "Current round: {}, The weight is {}, self_has_quorum: {}",
+                current_round, self.weight, self.has_quorum
+            );
         }
         // Modify processing condition
         // if self.expected_round % committee.solid_step_length() as u64 == 1 && self.expected_round > 1 {
@@ -175,9 +200,7 @@ impl CertificatesAggregator {
             if self.quorum_reached_time.is_none() {
                 self.quorum_reached_time = Some(Instant::now());
             }
-            let mut all = Vec::with_capacity(
-                self.certificates.len()
-            );
+            let mut all = Vec::with_capacity(self.certificates.len());
             all.extend(self.certificates.iter().cloned());
             // if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
             return Ok(Some(all));

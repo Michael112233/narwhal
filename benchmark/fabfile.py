@@ -4,9 +4,15 @@ from fabric import task
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import Print
-from benchmark.remote import Bench, BenchError
 from benchmark.cloudlab_instance import CloudLabInstanceManager
 from benchmark.cloudlab_remote import CloudLabBench
+from benchmark.utils import BenchError
+
+# Import AWS remote benchmark module only when needed (lazy import).
+try:
+    from benchmark.remote import Bench
+except ImportError:
+    Bench = None
 
 # Import AWS instance module only when needed (lazy import - CloudLab doesn't need it)
 try:
@@ -23,29 +29,29 @@ except ImportError:
 
 
 @task
-def local(ctx, debug=True):
+def local(ctx, debug=False):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'faults': 0,
-        'nodes': 4,
+        'nodes': 10,
         'workers': 1,
-        'rate_type': 'imbalanced',
-        'rate': 160000,
+        'rate_type': 'balanced',
+        'rate': 80000,
         'tx_size': 512,
-        'duration': 40,
+        'duration': 20,
     }
     node_params = {
-        'header_size': 1_000,  # bytes
-        'max_header_delay': 200,  # ms
+        'header_size': 1000,  # bytes
+        'max_header_delay': 200  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
-        'solid_step_length': 2,
-        'reference': 3,
-        'solid_step_number': 1,
-        'coverage': 3,
+        'sigma': 2,
+        'kappa': 2,
+        'reference': 4,
+        'coverage': 7,
         's': 0.99
     }
     try:
@@ -118,6 +124,9 @@ def info(ctx):
 @task
 def install(ctx):
     ''' Install the codebase on all machines '''
+    if Bench is None:
+        Print.error('AWS benchmark support is not available (remote dependencies may not be installed)')
+        return
     try:
         Bench(ctx).install()
     except BenchError as e:
@@ -127,6 +136,9 @@ def install(ctx):
 @task
 def remote(ctx, debug=False):
     ''' Run benchmarks on AWS '''
+    if Bench is None:
+        Print.error('AWS benchmark support is not available (remote dependencies may not be installed)')
+        return
     bench_params = {
         'faults': 3,
         'nodes': [10],
@@ -178,6 +190,9 @@ def plot(ctx):
 @task
 def kill(ctx):
     ''' Stop execution on all machines (AWS) '''
+    if Bench is None:
+        Print.error('AWS benchmark support is not available (remote dependencies may not be installed)')
+        return
     try:
         Bench(ctx).kill()
     except BenchError as e:

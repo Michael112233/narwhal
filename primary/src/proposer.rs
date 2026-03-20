@@ -50,10 +50,10 @@ pub struct Proposer {
     payload_size: usize,
     /// The solid step length.
     solid_step_length: u64,
-    /// Extra delay for critical rounds to let late certificates arrive.
-    critical_round_delay: Duration,
-    /// When the current critical round first became parent-ready.
-    critical_round_ready_since: Option<Instant>,
+    /// Short grace period after parents become ready to absorb late certificates.
+    parent_grace_delay: Duration,
+    /// When the current round first became parent-ready.
+    parent_ready_since: Option<Instant>,
     /// The persistent storage.
     store: Store,
 }
@@ -80,10 +80,15 @@ impl Proposer {
             .map(|x| x.digest())
             .collect();
         let solid_step_length = committee.solid_step_length() as u64;
-        let critical_round_delay_ms = std::env::var("NARWHAL_PROPOSER_CRITICAL_DELAY_MS")
+        let parent_grace_delay_ms = std::env::var("NARWHAL_PROPOSER_PARENT_GRACE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(20);
+            .or_else(|| {
+                std::env::var("NARWHAL_PROPOSER_CRITICAL_DELAY_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+            })
+            .unwrap_or(30);
 
         tokio::spawn(async move {
             Self {
@@ -102,8 +107,8 @@ impl Proposer {
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 solid_step_length,
-                critical_round_delay: Duration::from_millis(critical_round_delay_ms),
-                critical_round_ready_since: None,
+                parent_grace_delay: Duration::from_millis(parent_grace_delay_ms),
+                parent_ready_since: None,
                 store,
             }
             .run()
@@ -126,52 +131,59 @@ impl Proposer {
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
         debug!(
             "Created header {} (origin Node{}, round {})",
-            header.id,
-            origin_node,
-            header.round
+            header.id, origin_node, header.round
         );
         debug!("Created {:?}", header);
 
-        // Maintain solid_step_vertices:
-        // - solid-step initialization rounds reset to the current header ([r,x]),
-        // - all other rounds merge from parent certificates.
+        // Maintain solid_step metadata according to the intended semantics:
+        // - round 1: solid_step_vertices = parents, merged = parents
+        // - init rounds (r % solid_step_len == 0): solid_step_vertices = union(parent.merged), merged = {header}
+        // - all other rounds: solid_step_vertices = merged = union(parent.merged)
         debug!("the number of the parents is {}", header.parents.len());
         let parents: Vec<_> = header.parents.iter().cloned().collect();
         let mut merged = HashSet::new();
+        let step_index: Round = ((self.round - 1) % self.solid_step_length) + 1;
+        let regular_weak_start = self.round.saturating_sub(step_index);
 
-        for parent in parents {
+        for parent in &parents {
             // Never block proposer waiting on parent cert materialization here.
             // Missing parents can happen at bootstrap (genesis references) and should not
             // stall header dissemination.
             if let Ok(Some(bytes)) = self.store.read(parent.to_vec()).await {
                 if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                    let parent_round = cert.round();
-                    let parent_id = cert.header.id.clone();
-                    merged.extend(cert.header.solid_step_vertices.iter().cloned());
-                    // If this parent is a weak edge and it is itself an init-round cert [r,x],
-                    // include it directly in solid_step_vertices.
-                    let is_weak = parent_round + 1 != self.round;
-                    let parent_is_init_round =
-                        parent_round == 1 || (parent_round > 1 && parent_round % self.solid_step_length == 0);
-                    if is_weak && parent_is_init_round {
-                        merged.insert(parent_id);
+                    if self.round > 1 && cert.round() < regular_weak_start {
+                        continue;
+                    }
+                    if cert.header.solid_step_vertices_merged.is_empty() {
+                        merged.extend(cert.header.solid_step_vertices.iter().cloned());
+                    } else {
+                        merged.extend(cert.header.solid_step_vertices_merged.iter().cloned());
                     }
                 }
             }
         }
-        // Preserve parent-merge snapshot for consensus validity checks.
-        header.store_solid_step_merged_vertices(merged.clone());
 
         let is_solid_step_init_round =
             self.round == 1 || (self.round > 1 && self.round % self.solid_step_length == 0);
-        if is_solid_step_init_round {
-            let mut vertices: HashSet<Digest> = HashSet::new();
-            vertices.insert(header.id.clone());
-            header.store_solid_step_vertex(vertices);
-        } else {
+        if self.round == 1 {
+            let parent_set: HashSet<Digest> = parents.into_iter().collect();
+            header.store_solid_step_vertex(parent_set.clone());
+            header.store_solid_step_merged_vertices(parent_set);
+        } else if is_solid_step_init_round {
             header.store_solid_step_vertex(merged);
+
+            let mut self_only: HashSet<Digest> = HashSet::new();
+            self_only.insert(header.id.clone());
+            header.store_solid_step_merged_vertices(self_only);
+        } else {
+            header.store_solid_step_vertex(merged.clone());
+            header.store_solid_step_merged_vertices(merged);
         }
-        debug!("Current round: {}, The number of the solid step vertices is {}", self.round, header.solid_step_vertices.len());
+        debug!(
+            "Current round: {}, The number of the solid step vertices is {}",
+            self.round,
+            header.solid_step_vertices.len()
+        );
 
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
@@ -194,7 +206,7 @@ impl Proposer {
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
         let mut write_enough_parent = false;
-        let mut write_enough_digests = false;   
+        let mut write_enough_digests = false;
 
         loop {
             if self.last_proposed_round >= self.round {
@@ -210,26 +222,30 @@ impl Proposer {
             // 1. We have a quorum of certificates from the previous round and enough batches' digests;
             // 2. We have a quorum of certificates from the previous round and the specified maximum
             // inter-header delay has passed.
+            // In both cases, we wait a short parent grace period first so late certificates can
+            // still refresh the parent set before the header is created.
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
-            let bootstrap_round_ready = self.round == 1 && self.last_proposed_round < self.round;
-            // For the first round of every solid step, wait a short micro-window after
-            // parents become ready. This gives late certificates a chance to be included.
-            let is_critical_round = self.round > 1
-                && self.round % self.solid_step_length == 0
-                && self.last_proposed_round < self.round;
-            if is_critical_round && enough_parents {
-                if self.critical_round_ready_since.is_none() {
-                    self.critical_round_ready_since = Some(Instant::now());
+            let round_open = self.last_proposed_round < self.round;
+            let bootstrap_round_ready = self.round == 1 && round_open;
+            if round_open && enough_parents && !bootstrap_round_ready {
+                if self.parent_ready_since.is_none() {
+                    self.parent_ready_since = Some(Instant::now());
+                    debug!(
+                        "Round {} got enough parents; waiting {:?} grace period before proposal",
+                        self.round, self.parent_grace_delay
+                    );
                 }
             } else {
-                self.critical_round_ready_since = None;
+                self.parent_ready_since = None;
             }
-            let critical_delay_elapsed = is_critical_round
-                && self
-                    .critical_round_ready_since
-                    .map_or(false, |t| t.elapsed() >= self.critical_round_delay);
+            let parent_grace_elapsed = bootstrap_round_ready
+                || (round_open
+                    && enough_parents
+                    && self
+                        .parent_ready_since
+                        .map_or(false, |t| t.elapsed() >= self.parent_grace_delay));
             if enough_parents && !write_enough_parent {
                 debug!("We have enough parents to propose a new header");
                 write_enough_parent = true;
@@ -238,7 +254,8 @@ impl Proposer {
                 debug!("We have enough digests to propose a new header");
                 write_enough_digests = true;
             }
-            if (bootstrap_round_ready || timer_expired || enough_digests || critical_delay_elapsed)
+            if parent_grace_elapsed
+                && (bootstrap_round_ready || timer_expired || enough_digests)
                 && enough_parents
             {
                 write_enough_parent = false;
@@ -246,17 +263,11 @@ impl Proposer {
                 if timer_expired {
                     debug!("The timer has expired");
                 }
-                if is_critical_round && !timer_expired && !enough_digests {
-                    debug!(
-                        "Critical round {} delayed by {:?} before proposal",
-                        self.round, self.critical_round_delay
-                    );
-                }
-                
+
                 // Make a new header.
                 self.make_header().await;
                 self.payload_size = 0;
-                self.critical_round_ready_since = None;
+                self.parent_ready_since = None;
 
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);

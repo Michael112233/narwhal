@@ -324,8 +324,7 @@ impl HeaderWaiter {
                 if canceled_count > 0 {
                     debug!(
                         "GC cleanup: canceled {} pending header waiter(s) for rounds <= {}",
-                        canceled_count,
-                        gc_round
+                        canceled_count, gc_round
                     );
                 }
                 self.pending.retain(|_, (r, _)| r > &mut gc_round);

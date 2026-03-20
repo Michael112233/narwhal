@@ -130,7 +130,8 @@ impl Core {
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
         // Track this locally proposed header independently so votes on current/future headers
         // can be aggregated in parallel.
-        self.pending_headers.insert(header.id.clone(), header.clone());
+        self.pending_headers
+            .insert(header.id.clone(), header.clone());
         self.votes_aggregators
             .entry(header.id.clone())
             .or_insert_with(VotesAggregator::new);
@@ -141,8 +142,7 @@ impl Core {
         // 3. Core broadcasts header to all other primaries
         debug!(
             "Broadcasting header {} (round {}) to other primaries",
-            header.id,
-            header.round
+            header.id, header.round
         );
         let addresses: Vec<_> = self
             .committee
@@ -156,10 +156,7 @@ impl Core {
         let header_id = header.id.clone();
         let header_round = header.round;
         for address in addresses {
-            let handler = self
-                .network
-                .send(address, Bytes::from(bytes.clone()))
-                .await;
+            let handler = self.network.send(address, Bytes::from(bytes.clone())).await;
             let id = header_id.clone();
             tokio::spawn(async move {
                 match handler.await {
@@ -190,9 +187,7 @@ impl Core {
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
         debug!(
             "Received header {} (origin Node{}, round {}): entering processing pipeline",
-            header.id,
-            origin_node,
-            header.round
+            header.id, origin_node, header.round
         );
         debug!("Processing {:?}", header);
         // Indicate that we are processing this header.
@@ -214,26 +209,30 @@ impl Core {
             return Ok(());
         }
 
-        // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
+        // Check the parent certificates. We allow commit-time weak edges from the whole
+        // solid-wave window, but only the solid-step window contributes to processing.
         let round = header.round as u64;
         let solid_step_length = self.committee.solid_step_length();
+        let solid_wave_length = self.committee.solid_wave_length();
         let is_solid_step = self.committee.is_solid_step(round);
+        let step_index: Round = ((round - 1) % solid_step_length) + 1;
+        let wave_index: Round = ((round - 1) % solid_wave_length) + 1;
+        let regular_weak_start: Round = round.saturating_sub(step_index);
+        let commit_weak_start: Round = round.saturating_sub(wave_index);
 
         let mut stake = 0u64;
         let mut solid_step_union = HashSet::new();
 
         for x in &parents {
-            if x.round() + solid_step_length < header.round && x.round() > header.round {
-                debug!("Parent {:?} is from round {}, while the header round should be in range from round {} to {}", x, x.round(), header.round - solid_step_length, header.round);
-                continue;
-            }
             ensure!(
-                x.round() + solid_step_length >= header.round && x.round() <= header.round,
+                x.round() >= commit_weak_start && x.round() < round,
                 DagError::MalformedHeader(header.id.clone())
             );
-            stake += self.committee.stake(&x.origin()) as u64;
-            if is_solid_step {
-                solid_step_union.extend(x.header.solid_step_vertices.iter().cloned());
+            if x.round() >= regular_weak_start {
+                stake += self.committee.stake(&x.origin()) as u64;
+                if is_solid_step {
+                    solid_step_union.extend(x.header.solid_step_vertices_merged.iter().cloned());
+                }
             }
         }
 
@@ -276,8 +275,7 @@ impl Core {
         if already_voted {
             debug!(
                 "Discarding header {} (round {}): already voted for author in this round",
-                header.id,
-                header.round
+                header.id, header.round
             );
         } else {
             // Mark that we're voting for this author in this round.
@@ -288,12 +286,14 @@ impl Core {
 
             // Make a vote and send it to the header's creator.
             let vote = Vote::new(header, &self.name, &mut self.signature_service).await;
-            debug!("Created vote {:?} for header {} (round {})", vote, header.id, header.round);
+            debug!(
+                "Created vote {:?} for header {} (round {})",
+                vote, header.id, header.round
+            );
             if vote.origin == self.name {
                 debug!(
                     "Processing own vote for header {} (round {}) locally",
-                    header.id,
-                    header.round
+                    header.id, header.round
                 );
                 self.process_vote(vote)
                     .await
@@ -330,8 +330,7 @@ impl Core {
             None => {
                 debug!(
                     "Ignoring vote for unknown/local-untracked header {} (round {})",
-                    vote_id,
-                    vote.round
+                    vote_id, vote.round
                 );
                 return Ok(());
             }
@@ -342,8 +341,7 @@ impl Core {
             .votes_aggregators
             .entry(vote_id.clone())
             .or_insert_with(VotesAggregator::new);
-        if let Some(certificate) = aggregator.append(vote, &self.committee, &header)?
-        {
+        if let Some(certificate) = aggregator.append(vote, &self.committee, &header)? {
             self.pending_headers.remove(&vote_id);
             self.votes_aggregators.remove(&vote_id);
             let origin = certificate.origin();
@@ -371,8 +369,7 @@ impl Core {
             let cert_round = certificate.round();
             debug!(
                 "Broadcasting certificate {} (round {}) to other primaries",
-                cert_id,
-                cert_round
+                cert_id, cert_round
             );
             let addresses: Vec<_> = self
                 .committee
@@ -383,10 +380,7 @@ impl Core {
             let bytes = bincode::serialize(&PrimaryMessage::Certificate(certificate.clone()))
                 .expect("Failed to serialize our own certificate");
             for address in addresses {
-                let handler = self
-                    .network
-                    .send(address, Bytes::from(bytes.clone()))
-                    .await;
+                let handler = self.network.send(address, Bytes::from(bytes.clone())).await;
                 let id = cert_id.clone();
                 tokio::spawn(async move {
                     match handler.await {
@@ -478,7 +472,7 @@ impl Core {
                 .entry(current_round)
                 .or_insert_with(|| Box::new(CertificatesAggregator::new(current_round)))
                 .append(certificate.clone(), &self.committee)?
-        {
+            {
                 let target_round = self.current_round;
                 self.current_round += 1;
                 self.tx_proposer
@@ -611,7 +605,7 @@ impl Core {
         //     // vote.id == self.current_header.id
         //     //     && vote.origin == self.current_header.author
         //     //     && vote.round == self.current_header.round,
-        //     vote.id == self.current_header.id 
+        //     vote.id == self.current_header.id
         //         && vote.origin == self.current_header.author,
         //     DagError::UnexpectedVote(vote.id.clone())
         // );
