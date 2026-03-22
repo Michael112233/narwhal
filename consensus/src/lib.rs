@@ -214,8 +214,8 @@ leader_digest(cert)= {:?} -> {:?} (node_id={})",
                     .values()
                     .map(|(_, x)| {
                         let vertices = &x.header.solid_step_vertices;
-                        let supports =
-                            vertices.contains(&leader_header_id) || vertices.contains(&leader_digest);
+                        let supports = vertices.contains(&leader_header_id)
+                            || vertices.contains(&leader_digest);
                         let node_id = self.author_to_node_id(x.origin());
                         support_entries.push(format!(
                             "[{},{}]:support={} solid=[{}] merged=[{}]",

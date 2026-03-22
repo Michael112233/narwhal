@@ -7,10 +7,10 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep_until, Duration, Instant};
 
 #[cfg(test)]
 #[path = "tests/proposer_tests.rs"]
@@ -36,26 +36,41 @@ pub struct Proposer {
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
 
-    /// The current round of the dag.
-    round: Round,
-    /// The last round for which this node has already created a header.
-    last_proposed_round: Round,
-    /// Holds the certificates' ids waiting to be included in the next header.
-    last_parents: Vec<Digest>,
-    /// Parents received ahead of time, keyed by the next round they unlock.
-    pending_parents: HashMap<Round, Vec<Digest>>,
+    /// Unlocked proposal rounds waiting to be materialized into headers.
+    unlocked_rounds: HashMap<Round, UnlockedRound>,
+    /// Tracks which rounds this proposer has already materialized.
+    proposed_rounds: HashSet<Round>,
+    /// Monotonic unlock order used to preserve "first unlocked, first proposed".
+    next_unlock_order: u64,
     /// Holds the batches' digests waiting to be included in the next header.
-    digests: Vec<(Digest, WorkerId)>,
+    digests: VecDeque<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
     payload_size: usize,
     /// The solid step length.
     solid_step_length: u64,
     /// Short grace period after parents become ready to absorb late certificates.
     parent_grace_delay: Duration,
-    /// When the current round first became parent-ready.
-    parent_ready_since: Option<Instant>,
     /// The persistent storage.
     store: Store,
+}
+
+struct UnlockedRound {
+    parents: Vec<Digest>,
+    ready_since: Instant,
+    unlock_order: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RoundClass {
+    Bootstrap,
+    Critical,
+    Intermediate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProposalDecision {
+    round: Round,
+    include_payload: bool,
 }
 
 impl Proposer {
@@ -90,6 +105,16 @@ impl Proposer {
             })
             .unwrap_or(30);
 
+        let mut unlocked_rounds = HashMap::new();
+        unlocked_rounds.insert(
+            1,
+            UnlockedRound {
+                parents: genesis,
+                ready_since: Instant::now(),
+                unlock_order: 0,
+            },
+        );
+
         tokio::spawn(async move {
             Self {
                 name,
@@ -100,15 +125,13 @@ impl Proposer {
                 rx_core,
                 rx_workers,
                 tx_core,
-                round: 1,
-                last_proposed_round: 0,
-                last_parents: genesis,
-                pending_parents: HashMap::new(),
-                digests: Vec::with_capacity(2 * header_size),
+                unlocked_rounds,
+                proposed_rounds: HashSet::new(),
+                next_unlock_order: 1,
+                digests: VecDeque::with_capacity(2 * header_size),
                 payload_size: 0,
                 solid_step_length,
                 parent_grace_delay: Duration::from_millis(parent_grace_delay_ms),
-                parent_ready_since: None,
                 store,
             }
             .run()
@@ -116,13 +139,233 @@ impl Proposer {
         });
     }
 
-    async fn make_header(&mut self) {
+    fn merge_parents(existing: &mut Vec<Digest>, parents: Vec<Digest>) -> (usize, usize) {
+        let old_len = existing.len();
+        let mut merged: HashSet<Digest> = existing.drain(..).collect();
+        merged.extend(parents);
+        let merged_len = merged.len();
+        *existing = merged.into_iter().collect();
+        (old_len, merged_len)
+    }
+
+    fn round_class(&self, round: Round) -> RoundClass {
+        if round == 1 {
+            RoundClass::Bootstrap
+        } else if self.is_critical_round(round) {
+            RoundClass::Critical
+        } else {
+            RoundClass::Intermediate
+        }
+    }
+
+    fn is_critical_round(&self, round: Round) -> bool {
+        round > 1 && round % self.solid_step_length == 0
+    }
+
+    fn is_intermediate_round(&self, round: Round) -> bool {
+        round > 1 && !self.is_critical_round(round)
+    }
+
+    fn next_critical_round(&self, round: Round) -> Option<Round> {
+        if !self.is_intermediate_round(round) {
+            return None;
+        }
+
+        Some(((round / self.solid_step_length) + 1) * self.solid_step_length)
+    }
+
+    fn critical_round_started(&self, round: Round) -> bool {
+        self.unlocked_rounds
+            .keys()
+            .chain(self.proposed_rounds.iter())
+            .any(|candidate| self.is_critical_round(*candidate) && *candidate >= round)
+    }
+
+    fn is_obsolete_intermediate_round(&self, round: Round) -> bool {
+        self.next_critical_round(round)
+            .map(|next_critical| self.critical_round_started(next_critical))
+            .unwrap_or(false)
+    }
+
+    fn drop_obsolete_intermediate_rounds(&mut self, critical_round: Round) {
+        let stale_rounds: Vec<_> = self
+            .unlocked_rounds
+            .keys()
+            .copied()
+            .filter(|round| {
+                self.next_critical_round(*round)
+                    .map(|next_critical| next_critical <= critical_round)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        for stale_round in stale_rounds {
+            self.unlocked_rounds.remove(&stale_round);
+            debug!(
+                "Dropping stale intermediate round {} because critical round {} already started",
+                stale_round, critical_round
+            );
+        }
+    }
+
+    fn is_round_ready(&self, round: Round, state: &UnlockedRound) -> bool {
+        round == 1 || state.ready_since.elapsed() >= self.parent_grace_delay
+    }
+
+    fn next_recheck_deadline(&self, payload_deadline: Instant) -> Instant {
+        let mut next_deadline = payload_deadline;
+
+        for (round, state) in &self.unlocked_rounds {
+            if self.proposed_rounds.contains(round) || state.parents.is_empty() {
+                continue;
+            }
+
+            let ready_deadline = if *round == 1 {
+                Instant::now()
+            } else {
+                state.ready_since + self.parent_grace_delay
+            };
+            if ready_deadline < next_deadline {
+                next_deadline = ready_deadline;
+            }
+        }
+
+        next_deadline
+    }
+
+    fn unlock_round(&mut self, round: Round, parents: Vec<Digest>) {
+        if self.proposed_rounds.contains(&round) {
+            debug!(
+                "Received stale parents for already proposed round {}",
+                round
+            );
+            return;
+        }
+
+        if self.is_intermediate_round(round) && self.is_obsolete_intermediate_round(round) {
+            self.unlocked_rounds.remove(&round);
+            debug!(
+                "Discarding intermediate round {} because its next critical round has already started",
+                round
+            );
+            return;
+        }
+
+        if self.is_critical_round(round) {
+            self.drop_obsolete_intermediate_rounds(round);
+        }
+
+        match self.unlocked_rounds.get_mut(&round) {
+            Some(state) => {
+                let (old_len, merged_len) = Self::merge_parents(&mut state.parents, parents);
+                debug!(
+                    "Refreshing parents for unlocked round {} before proposal (old={}, merged={})",
+                    round, old_len, merged_len
+                );
+            }
+            None => {
+                let unlock_order = self.next_unlock_order;
+                self.next_unlock_order += 1;
+                self.unlocked_rounds.insert(
+                    round,
+                    UnlockedRound {
+                        parents,
+                        ready_since: Instant::now(),
+                        unlock_order,
+                    },
+                );
+                debug!(
+                    "Unlocked proposal round {} (unlock order {})",
+                    round, unlock_order
+                );
+            }
+        }
+    }
+
+    fn next_proposal_round(
+        &self,
+        timer_expired: bool,
+        enough_digests: bool,
+    ) -> Option<ProposalDecision> {
+        let payload_trigger = timer_expired || enough_digests;
+        let has_payload = !self.digests.is_empty();
+
+        if let Some((round, _)) = self
+            .unlocked_rounds
+            .iter()
+            .filter(|(round, state)| {
+                !self.proposed_rounds.contains(round) && !state.parents.is_empty()
+            })
+            .filter(|(round, state)| {
+                self.round_class(**round) == RoundClass::Bootstrap
+                    && self.is_round_ready(**round, state)
+            })
+            .min_by_key(|(_, state)| state.unlock_order)
+        {
+            return Some(ProposalDecision {
+                round: *round,
+                include_payload: false,
+            });
+        }
+
+        if !payload_trigger {
+            return None;
+        }
+
+        let critical_round = self
+            .unlocked_rounds
+            .iter()
+            .filter(|(round, state)| {
+                !self.proposed_rounds.contains(round)
+                    && !state.parents.is_empty()
+                    && self.round_class(**round) == RoundClass::Critical
+                    && self.is_round_ready(**round, state)
+            })
+            .min_by_key(|(_, state)| state.unlock_order)
+            .map(|(round, _)| *round);
+
+        let intermediate_round = self
+            .unlocked_rounds
+            .iter()
+            .filter(|(round, state)| {
+                !self.proposed_rounds.contains(round)
+                    && !state.parents.is_empty()
+                    && self.round_class(**round) == RoundClass::Intermediate
+                    && self.is_round_ready(**round, state)
+            })
+            .min_by_key(|(_, state)| state.unlock_order)
+            .map(|(round, _)| *round);
+
+        let selected_round = match (critical_round, intermediate_round) {
+            (Some(critical_round), Some(_)) if has_payload => Some(critical_round),
+            (_, Some(intermediate_round)) => Some(intermediate_round),
+            (Some(critical_round), None) => Some(critical_round),
+            (None, None) => None,
+        }?;
+
+        Some(ProposalDecision {
+            round: selected_round,
+            include_payload: has_payload,
+        })
+    }
+
+    fn take_payload_for_header(&mut self) -> BTreeMap<Digest, WorkerId> {
+        self.payload_size = 0;
+        self.digests.drain(..).collect()
+    }
+
+    async fn make_header(&mut self, round: Round, parents: Vec<Digest>, include_payload: bool) {
         // Make a new header.
+        let payload = if include_payload {
+            self.take_payload_for_header()
+        } else {
+            BTreeMap::new()
+        };
         let mut header = Header::new(
             self.name,
-            self.round,
-            self.digests.drain(..).collect(),
-            self.last_parents.drain(..).collect(),
+            round,
+            payload,
+            parents.into_iter().collect(),
             &mut self.signature_service,
         )
         .await;
@@ -130,8 +373,12 @@ impl Proposer {
             .node_id
             .map_or_else(|| "unknown".to_string(), |idx| idx.to_string());
         debug!(
-            "Created header {} (origin Node{}, round {})",
-            header.id, origin_node, header.round
+            "Created {:?} header {} (origin Node{}, round {}, payload_entries={})",
+            self.round_class(round),
+            header.id,
+            origin_node,
+            header.round,
+            header.payload.len()
         );
         debug!("Created {:?}", header);
 
@@ -142,8 +389,8 @@ impl Proposer {
         debug!("the number of the parents is {}", header.parents.len());
         let parents: Vec<_> = header.parents.iter().cloned().collect();
         let mut merged = HashSet::new();
-        let step_index: Round = ((self.round - 1) % self.solid_step_length) + 1;
-        let regular_weak_start = self.round.saturating_sub(step_index);
+        let step_index: Round = ((round - 1) % self.solid_step_length) + 1;
+        let regular_weak_start = round.saturating_sub(step_index);
 
         for parent in &parents {
             // Never block proposer waiting on parent cert materialization here.
@@ -151,7 +398,7 @@ impl Proposer {
             // stall header dissemination.
             if let Ok(Some(bytes)) = self.store.read(parent.to_vec()).await {
                 if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
-                    if self.round > 1 && cert.round() < regular_weak_start {
+                    if round > 1 && cert.round() < regular_weak_start {
                         continue;
                     }
                     if cert.header.solid_step_vertices_merged.is_empty() {
@@ -164,8 +411,8 @@ impl Proposer {
         }
 
         let is_solid_step_init_round =
-            self.round == 1 || (self.round > 1 && self.round % self.solid_step_length == 0);
-        if self.round == 1 {
+            round == 1 || (round > 1 && round % self.solid_step_length == 0);
+        if round == 1 {
             let parent_set: HashSet<Digest> = parents.into_iter().collect();
             header.store_solid_step_vertex(parent_set.clone());
             header.store_solid_step_merged_vertices(parent_set);
@@ -181,7 +428,7 @@ impl Proposer {
         }
         debug!(
             "Current round: {}, The number of the solid step vertices is {}",
-            self.round,
+            round,
             header.solid_step_vertices.len()
         );
 
@@ -196,148 +443,58 @@ impl Proposer {
             .send(header)
             .await
             .expect("Failed to send header");
-        self.last_proposed_round = self.round;
     }
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
-        debug!("Dag starting at round {}", self.round);
+        debug!("Dag starting with bootstrap round 1 unlocked");
 
-        let timer = sleep(Duration::from_millis(self.max_header_delay));
+        let mut payload_deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
+        let timer = sleep_until(payload_deadline);
         tokio::pin!(timer);
-        let mut write_enough_parent = false;
-        let mut write_enough_digests = false;
 
         loop {
-            if self.last_proposed_round >= self.round {
-                if let Some(parents) = self.pending_parents.remove(&(self.round + 1)) {
-                    self.round += 1;
-                    self.last_parents = parents;
-                    debug!("Dag moved to round {} from buffered parents", self.round);
-                }
-            }
-
-            // Check if we can propose a new header. We propose a new header when one of the following
-            // conditions is met:
-            // 1. We have a quorum of certificates from the previous round and enough batches' digests;
-            // 2. We have a quorum of certificates from the previous round and the specified maximum
-            // inter-header delay has passed.
-            // In both cases, we wait a short parent grace period first so late certificates can
-            // still refresh the parent set before the header is created.
-            let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
-            let timer_expired = timer.is_elapsed();
-            let round_open = self.last_proposed_round < self.round;
-            let bootstrap_round_ready = self.round == 1 && round_open;
-            if round_open && enough_parents && !bootstrap_round_ready {
-                if self.parent_ready_since.is_none() {
-                    self.parent_ready_since = Some(Instant::now());
+            let timer_expired = Instant::now() >= payload_deadline;
+            if let Some(decision) = self.next_proposal_round(timer_expired, enough_digests) {
+                if decision.round != 1 {
                     debug!(
-                        "Round {} got enough parents; waiting {:?} grace period before proposal",
-                        self.round, self.parent_grace_delay
+                        "Proposing {:?} round {} (payload={}, timer_expired={}, enough_digests={})",
+                        self.round_class(decision.round),
+                        decision.round,
+                        decision.include_payload,
+                        timer_expired,
+                        enough_digests
                     );
                 }
-            } else {
-                self.parent_ready_since = None;
-            }
-            let parent_grace_elapsed = bootstrap_round_ready
-                || (round_open
-                    && enough_parents
-                    && self
-                        .parent_ready_since
-                        .map_or(false, |t| t.elapsed() >= self.parent_grace_delay));
-            if enough_parents && !write_enough_parent {
-                debug!("We have enough parents to propose a new header");
-                write_enough_parent = true;
-            }
-            if enough_digests && !write_enough_digests {
-                debug!("We have enough digests to propose a new header");
-                write_enough_digests = true;
-            }
-            if parent_grace_elapsed
-                && (bootstrap_round_ready || timer_expired || enough_digests)
-                && enough_parents
-            {
-                write_enough_parent = false;
-                write_enough_digests = false;
-                if timer_expired {
-                    debug!("The timer has expired");
+
+                let proposal_parents = self
+                    .unlocked_rounds
+                    .remove(&decision.round)
+                    .expect("Unlocked round disappeared unexpectedly")
+                    .parents;
+                self.make_header(decision.round, proposal_parents, decision.include_payload)
+                    .await;
+                self.proposed_rounds.insert(decision.round);
+                if decision.include_payload && self.is_critical_round(decision.round) {
+                    self.drop_obsolete_intermediate_rounds(decision.round);
                 }
+                payload_deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
 
-                // Make a new header.
-                self.make_header().await;
-                self.payload_size = 0;
-                self.parent_ready_since = None;
-
-                // Reschedule the timer.
-                let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
-                timer.as_mut().reset(deadline);
+                continue;
             }
+
+            let next_deadline = self.next_recheck_deadline(payload_deadline);
+            timer.as_mut().reset(next_deadline);
 
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
-                    let next_round = round + 1;
-                    if next_round < self.round {
-                        debug!("Received stale parents for round {} but we are at round {}", round, self.round);
-                        continue;
-                    }
-
-                    // If we have not proposed this round yet, keep accepting updated parents
-                    // for this exact round. This lets late weak-edge certificates refresh
-                    // the parent set before the header is created.
-                    if next_round == self.round {
-                        if self.last_proposed_round < self.round {
-                            let old_len = self.last_parents.len();
-                            let mut merged: HashSet<Digest> =
-                                self.last_parents.drain(..).collect();
-                            merged.extend(parents.into_iter());
-                            let merged_len = merged.len();
-                            debug!(
-                                "Refreshing parents for current round {} before proposal (old={}, merged={})",
-                                self.round,
-                                old_len,
-                                merged_len
-                            );
-                            self.last_parents = merged.into_iter().collect();
-                        } else {
-                            debug!(
-                                "Received stale parents for current round {} after proposal",
-                                self.round
-                            );
-                        }
-                        continue;
-                    }
-
-                    // Do not skip rounds: only advance by one round after we already proposed
-                    // the current round. Cache out-of-order future parents.
-                    if next_round == self.round + 1 && self.last_proposed_round >= self.round {
-                        self.round = next_round;
-                        debug!("Dag moved to round {}", self.round);
-                        let mut merged: HashSet<Digest> = self.last_parents.drain(..).collect();
-                        merged.extend(parents.into_iter());
-                        self.last_parents = merged.into_iter().collect();
-                    } else {
-                        debug!(
-                            "Buffering parents for future round {} (current round {}, last proposed round {})",
-                            next_round,
-                            self.round,
-                            self.last_proposed_round
-                        );
-                        match self.pending_parents.get_mut(&next_round) {
-                            Some(existing) => {
-                                let mut merged: HashSet<Digest> = existing.drain(..).collect();
-                                merged.extend(parents.into_iter());
-                                *existing = merged.into_iter().collect();
-                            }
-                            None => {
-                                self.pending_parents.insert(next_round, parents);
-                            }
-                        }
-                    }
+                    let proposal_round = round + 1;
+                    self.unlock_round(proposal_round, parents);
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     self.payload_size += digest.size();
-                    self.digests.push((digest, worker_id));
+                    self.digests.push_back((digest, worker_id));
                 }
                 () = &mut timer => {
                     // Nothing to do.

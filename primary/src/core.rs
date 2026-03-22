@@ -52,8 +52,6 @@ pub struct Core {
 
     /// The last garbage collected round.
     gc_round: Round,
-    /// The current round of the dag (synchronized with Proposer's round).
-    current_round: Round,
     /// The authors of the last voted headers.
     last_voted: HashMap<Round, HashSet<PublicKey>>,
     /// The set of headers we are currently processing.
@@ -64,8 +62,6 @@ pub struct Core {
     votes_aggregators: HashMap<Digest, VotesAggregator>,
     /// Aggregates certificates to use as parents for new headers.
     certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>,
-    /// Future certificates buffered until `current_round` catches up.
-    pending_certificates: HashMap<Round, Vec<Certificate>>,
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
@@ -112,13 +108,11 @@ impl Core {
                 tx_consensus,
                 tx_proposer,
                 gc_round: 0,
-                current_round: 1, // Start at round 1, same as Proposer
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 pending_headers: HashMap::with_capacity(2 * gc_depth as usize),
                 votes_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                pending_certificates: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
             }
@@ -251,15 +245,15 @@ impl Core {
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
-        // if self.synchronizer.missing_payload(header).await? {
-        //     debug!(
-        //         "Header {} (round {}) suspended in synchronizer: missing payload, will be retried by HeaderWaiter, header={:?}",
-        //         header.id,
-        //         header.round,
-        //         header
-        //     );
-        //     return Ok(());
-        // }
+        if self.synchronizer.missing_payload(header).await? {
+            debug!(
+                "Header {} (round {}) suspended in synchronizer: missing payload, will be retried by HeaderWaiter, header={:?}",
+                header.id,
+                header.round,
+                header
+            );
+            return Ok(());
+        }
 
         // Store the header.
         let bytes = bincode::serialize(header).expect("Failed to serialize header");
@@ -437,94 +431,35 @@ impl Core {
 
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
-        // if !self.synchronizer.deliver_certificate(&certificate).await? {
-        //     debug!(
-        //         "Certificate {} (round {}) suspended in synchronizer: missing ancestor certificates, will be retried by CertificateWaiter",
-        //         certificate.header.id,
-        //         certificate.round()
-        //     );
-        //     return Ok(());
-        // }
+        if !self.synchronizer.deliver_certificate(&certificate).await? {
+            debug!(
+                "Certificate {} (round {}) suspended in synchronizer: missing ancestor certificates, will be retried by CertificateWaiter",
+                certificate.header.id,
+                certificate.round()
+            );
+            return Ok(());
+        }
 
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
-        // Check if we have enough certificates to enter a new dag round and propose a header.
-        // Use the core's current_round as the single active aggregation round.
-        // Older certificates can still be attached as weak edges by the aggregator.
-        if certificate.round() > self.current_round {
-            let cert_round = certificate.round();
-            self.pending_certificates
-                .entry(cert_round)
-                .or_insert_with(Vec::new)
-                .push(certificate.clone());
-            debug!(
-                "Buffered future certificate {} (round {}) while current_round={}",
-                certificate.header.id,
-                certificate.round(),
-                self.current_round
-            );
-        } else {
-            let current_round = self.current_round;
+        // Aggregate certificates by their own round instead of a single global current_round.
+        // Whichever round reaches the unlock condition first can be dispatched to proposer first.
+        let target_round_start = certificate.round();
+        let target_round_end = target_round_start + self.committee.solid_wave_length();
+        for target_round in target_round_start..target_round_end {
             if let Some(parents) = self
                 .certificates_aggregators
-                .entry(current_round)
-                .or_insert_with(|| Box::new(CertificatesAggregator::new(current_round)))
+                .entry(target_round)
+                .or_insert_with(|| Box::new(CertificatesAggregator::new(target_round)))
                 .append(certificate.clone(), &self.committee)?
             {
-                let target_round = self.current_round;
-                self.current_round += 1;
+                // Send it to the `Proposer`.
                 self.tx_proposer
                     .send((parents, target_round))
                     .await
                     .expect("Failed to send certificate");
-                debug!("Core advanced current_round to {}", self.current_round);
-
-                // Replay buffered certificates that are now <= current_round.
-                loop {
-                    let mut progressed = false;
-                    let mut replay_rounds: Vec<Round> = self
-                        .pending_certificates
-                        .keys()
-                        .cloned()
-                        .filter(|r| *r <= self.current_round)
-                        .collect();
-                    replay_rounds.sort_unstable();
-                    if replay_rounds.is_empty() {
-                        break;
-                    }
-                    for round in replay_rounds {
-                        if let Some(buffered) = self.pending_certificates.remove(&round) {
-                            for buffered_cert in buffered {
-                                let replay_current_round = self.current_round;
-                                if let Some(parents) = self
-                                    .certificates_aggregators
-                                    .entry(replay_current_round)
-                                    .or_insert_with(|| {
-                                        Box::new(CertificatesAggregator::new(replay_current_round))
-                                    })
-                                    .append(buffered_cert.clone(), &self.committee)?
-                                {
-                                    let target_round = self.current_round;
-                                    self.current_round += 1;
-                                    self.tx_proposer
-                                        .send((parents, target_round))
-                                        .await
-                                        .expect("Failed to send certificate");
-                                    debug!(
-                                        "Core advanced current_round to {} (replay)",
-                                        self.current_round
-                                    );
-                                    progressed = true;
-                                }
-                            }
-                        }
-                    }
-                    if !progressed {
-                        break;
-                    }
-                }
             }
         }
 
@@ -600,7 +535,7 @@ impl Core {
         //     DagError::TooOld(vote.digest(), vote.round)
         // );
 
-        // // Ensure we receive a vote on the expected header.
+        // Ensure we receive a vote on the expected header.
         // ensure!(
         //     // vote.id == self.current_header.id
         //     //     && vote.origin == self.current_header.author
@@ -611,7 +546,7 @@ impl Core {
         // );
 
         // // Verify the vote.
-        // vote.verify(&self.committee).map_err(DagError::from)
+        vote.verify(&self.committee).map_err(DagError::from);
         Ok(())
     }
 
@@ -750,7 +685,6 @@ impl Core {
                 self.processing.retain(|k, _| k >= &gc_round);
                 self.certificates_aggregators.retain(|k, _| k >= &gc_round);
                 self.cancel_handlers.retain(|k, _| k >= &gc_round);
-                self.pending_certificates.retain(|k, _| k >= &gc_round);
                 self.pending_headers.retain(|_, h| h.round >= gc_round);
                 let active_header_ids: HashSet<Digest> =
                     self.pending_headers.keys().cloned().collect();

@@ -72,6 +72,8 @@ pub struct CertificatesAggregator {
     /// Last computed union of parents' solid_step_vertices_merged on solid rounds
     /// (for debug / final_dag display).
     last_union_set: Option<Vec<Digest>>,
+    /// Whether this round's parents have already been emitted once to the proposer.
+    sent_to_proposer: bool,
 }
 
 impl CertificatesAggregator {
@@ -87,6 +89,7 @@ impl CertificatesAggregator {
             wait_duration: Duration::from_millis(20),
             union_vertices: HashSet::new(),
             last_union_set: None,
+            sent_to_proposer: false,
         }
     }
 
@@ -200,6 +203,10 @@ impl CertificatesAggregator {
             if self.quorum_reached_time.is_none() {
                 self.quorum_reached_time = Some(Instant::now());
             }
+            if self.sent_to_proposer {
+                return Ok(None);
+            }
+            self.sent_to_proposer = true;
             let mut all = Vec::with_capacity(self.certificates.len());
             all.extend(self.certificates.iter().cloned());
             // if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
