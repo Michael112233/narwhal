@@ -36,7 +36,7 @@ class Bench:
         self.settings = self.manager.settings
         try:
             ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
-                self.manager.settings.key_path
+                self.settings.key_path
             )
             self.connect = ctx.connect_kwargs
         except (IOError, PasswordRequiredException, SSHException) as e:
@@ -192,7 +192,16 @@ class Bench:
             addresses = OrderedDict(
                 (x, y) for x, y in zip(names, hosts)
             )
-        committee = Committee(addresses, self.settings.base_port)
+        solid_step_length = node_parameters.json.get('solid_step_length', 2)
+        solid_step_number = node_parameters.json.get('solid_step_number', 1)
+        solid_reference = node_parameters.json.get('reference', 3)
+        committee = Committee(
+            addresses,
+            self.settings.base_port,
+            solid_step_length,
+            solid_step_number,
+            solid_reference,
+        )
         committee.print(PathMaker.committee_file())
 
         node_parameters.print(PathMaker.parameters_file())
@@ -230,68 +239,6 @@ class Bench:
                     address,
                     bench_parameters.tx_size,
                     rate_share,
-                    [x for y in workers_addresses for _, x in y]
-                )
-                log_file = PathMaker.client_log_file(i, id)
-                self._background_run(host, cmd, log_file)
-
-        # Run the primaries (except the faulty ones).
-        Print.info('Booting primaries...')
-        for i, address in enumerate(committee.primary_addresses(faults)):
-            host = Committee.ip(address)
-            cmd = CommandMaker.run_primary(
-                PathMaker.key_file(i),
-                PathMaker.committee_file(),
-                PathMaker.db_path(i),
-                PathMaker.parameters_file(),
-                debug=debug
-            )
-            log_file = PathMaker.primary_log_file(i)
-            self._background_run(host, cmd, log_file)
-
-        # Run the workers (except the faulty ones).
-        Print.info('Booting workers...')
-        for i, addresses in enumerate(workers_addresses):
-            for (id, address) in addresses:
-                host = Committee.ip(address)
-                cmd = CommandMaker.run_worker(
-                    PathMaker.key_file(i),
-                    PathMaker.committee_file(),
-                    PathMaker.db_path(i, id),
-                    PathMaker.parameters_file(),
-                    id,  # The worker's id.
-                    debug=debug
-                )
-                log_file = PathMaker.worker_log_file(i, id)
-                self._background_run(host, cmd, log_file)
-
-        # Wait for all transactions to be processed.
-        duration = bench_parameters.duration
-        for _ in progress_bar(range(20), prefix=f'Running benchmark ({duration} sec):'):
-            sleep(ceil(duration / 20))
-        self.kill(hosts=hosts, delete_logs=False)
-
-    def _run_single_imbalanced(self, imbalanced_rate_list, committee, bench_parameters, debug=False):
-        """Run a single benchmark with imbalanced rates (different rate per node)"""
-        faults = bench_parameters.faults
-
-        # Kill any potentially unfinished run and delete logs.
-        hosts = committee.ips()
-        self.kill(hosts=hosts, delete_logs=True)
-
-        # Run the clients (they will wait for the nodes to be ready).
-        # Filter all faulty nodes from the client addresses (or they will wait
-        # for the faulty nodes to be online).
-        Print.info('Booting clients...')
-        workers_addresses = committee.workers_addresses(faults)
-        client_rates = imbalanced_rate_list
-        for i, addresses in enumerate(workers_addresses):
-            for (id, address) in addresses:
-                host = Committee.ip(address)
-                cmd = CommandMaker.run_client(
-                    address,
-                    bench_parameters.tx_size,
-                    client_rates[i],
                     [x for y in workers_addresses for _, x in y]
                 )
                 log_file = PathMaker.client_log_file(i, id)
@@ -404,33 +351,16 @@ class Bench:
             committee_copy = deepcopy(committee)
             committee_copy.remove_nodes(committee.size() - n)
 
-            if bench_parameters.rate_type == 'balanced':
-                rate_list = bench_parameters.rate
-            else:  # imbalanced
-                # For imbalanced, we run once with the imbalanced_rate list
-                rate_list = [bench_parameters.imbalanced_rate]
-
-            for r in rate_list:
-                if bench_parameters.rate_type == 'balanced':
-                    Print.heading(f'\nRunning {n} nodes (input rate: {r:,} tx/s)')
-                else:  # imbalanced
-                    Print.heading(f'\nRunning {n} nodes (imbalanced rates)')
+            for r in bench_parameters.rate:
+                Print.heading(f'\nRunning {n} nodes (input rate: {r:,} tx/s)')
 
                 # Run the benchmark.
                 for i in range(bench_parameters.runs):
                     Print.heading(f'Run {i+1}/{bench_parameters.runs}')
                     try:
-                        if bench_parameters.rate_type == 'balanced':
-                            self._run_single(
-                                r, committee_copy, bench_parameters, debug
-                            )
-                            rate_for_file = r
-                        else:  # imbalanced
-                            self._run_single_imbalanced(
-                                r, committee_copy, bench_parameters, debug
-                            )
-                            # Use sum of rates for filename
-                            rate_for_file = sum(r) if isinstance(r, list) else r
+                        self._run_single(
+                            r, committee_copy, bench_parameters, debug
+                        )
 
                         faults = bench_parameters.faults
                         logger = self._logs(committee_copy, faults)
@@ -439,7 +369,7 @@ class Bench:
                             n, 
                             bench_parameters.workers,
                             bench_parameters.collocate,
-                            rate_for_file, 
+                            r, 
                             bench_parameters.tx_size, 
                         ))
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:

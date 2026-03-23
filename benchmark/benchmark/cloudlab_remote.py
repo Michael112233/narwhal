@@ -17,14 +17,13 @@ from copy import deepcopy
 import subprocess
 import re
 import shlex
-import sys
-import shutil
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker
 from benchmark.commands import CommandMaker
 from benchmark.logs import LogParser, ParseError
 from benchmark.cloudlab_instance import CloudLabInstanceManager
+from benchmark.imbalanced_rate import ZipfAllocator, ExtremeAllocator, ParetoAllocator, TwoHeavyAllocator, ExtremeXAllocator, CustomAllocator
 
 
 class FabricError(Exception):
@@ -184,18 +183,25 @@ class CloudLabBench:
         host_info = self.manager.get_host_info()
         cmd = [
             'sudo apt-get update',
-            'sudo apt-get -y upgrade',
-            'sudo apt-get -y autoremove',
-            'sudo apt-get -y install build-essential',
-            'sudo apt-get -y install cmake',
-            'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
+            'sudo apt-get install -y tmux',
+            'curl https://sh.rustup.rs -sSf | sh -s -- -y',
+            'sudo apt-get install -y libclang-dev',
+            'sudo apt-get update',
+            'sudo apt-get install -y iproute2',
+            'sudo apt-get install -y python3-pip',
+            # Keep baseline build deps for benchmark compilation.
+            'sudo apt-get install -y build-essential cmake clang',
             'source $HOME/.cargo/env',
             'rustup default stable',
+            'rustup component add cargo rustc rust-std',
+            # Some nodes have a broken rustup cargo proxy; fall back to system cargo.
+            'rustup run stable cargo --version || sudo apt-get install -y cargo',
+            'rustc --version',
             # Add cargo to PATH permanently
             'echo "export PATH=\\$HOME/.cargo/bin:\\$PATH" >> $HOME/.bashrc',
             'echo "export PATH=\\$HOME/.cargo/bin:\\$PATH" >> $HOME/.profile',
-            'sudo apt-get install -y clang',
-            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))'
+            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))',
+            f'cd {self.settings.repo_name}/benchmark && pip3 install -r requirements.txt'
         ]
         
         try:
@@ -591,7 +597,8 @@ class CloudLabBench:
         if bench_parameters.collocate:
             nodes = max(bench_parameters.nodes)
             if len(host_info) < nodes:
-                raise BenchError(f'Not enough hosts: need {nodes}, have {len(host_info)}')
+                error_msg = f'Not enough hosts: need {nodes}, have {len(host_info)}'
+                raise BenchError(error_msg, ValueError(error_msg))
             return host_info[:nodes]
         else:
             # One node per machine (primary + workers on separate machines)
@@ -599,7 +606,8 @@ class CloudLabBench:
             workers = bench_parameters.workers
             total_machines = nodes * (1 + workers)  # primary + workers
             if len(host_info) < total_machines:
-                raise BenchError(f'Not enough hosts: need {total_machines}, have {len(host_info)}')
+                error_msg = f'Not enough hosts: need {total_machines}, have {len(host_info)}'
+                raise BenchError(error_msg, ValueError(error_msg))
             return host_info[:total_machines]
     
     def _modify_attack_rs(self, hosts, trigger_attack):
@@ -657,52 +665,30 @@ class CloudLabBench:
         branch = self.settings.branch
         
         cmd = [
-            # First ensure we're in home directory, then cd to repo
-            f'cd $HOME/{repo_name} || (echo "Repository $HOME/{repo_name} not found. Please run: fab cloudlab-install" && exit 1)',
+            f'cd {repo_name} || (echo "Repository {repo_name} not found. Please run: fab cloudlab-install" && exit 1)',
             'git fetch',
             f'git checkout {branch}',
             'git pull',
-            # Verify essential files exist before compiling
-            'test -f node/Cargo.toml || (echo "ERROR: node/Cargo.toml not found - branch may be missing files" && exit 1)',
-            'test -f node/src/main.rs || (echo "ERROR: node/src/main.rs not found - branch may be missing files" && exit 1)',
-            'test -f Cargo.toml || (echo "ERROR: Workspace Cargo.toml not found" && exit 1)',
-            # Source cargo environment before building (use $HOME which will be the actual user's home directory)
-            'source $HOME/.cargo/env 2>/dev/null || export PATH=$HOME/.cargo/bin:$PATH',
-            # Compile from the workspace root (we're already in narwhal directory)
-            # Clean and rebuild to ensure binaries are generated
-            'echo "Cleaning previous build..."',
-            'cargo clean --release 2>/dev/null || true',
-            'echo "Starting compilation..."',
-            'cargo build --release --features benchmark --bin node --bin benchmark_client || (echo "ERROR: Compilation failed with exit code $?" && exit 1)',
-            'echo "Compilation completed, checking for binaries..."',
-            # List all files in target/release to debug (ensure output is visible)
-            'echo "Files in target/release/:"',
-            'ls -la target/release/ 2>&1 | head -30',
-            'echo "Looking for executables:"',
-            'find target/release -maxdepth 1 -type f -executable 2>&1 | head -20',
-            # Verify binaries were built (with better error messages)
-            'test -f target/release/node || (echo "ERROR: node binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Looking for node binary:" && find target/release -name "node" -type f 2>/dev/null || echo "node binary not found anywhere" && exit 1)',
-            'test -f target/release/benchmark_client || (echo "ERROR: benchmark_client binary not found after compilation" && echo "Current directory: $(pwd)" && echo "Looking for benchmark_client binary:" && find target/release -name "benchmark_client" -type f 2>/dev/null || echo "benchmark_client binary not found anywhere" && exit 1)',
-            # Create symlinks:
-            # - benchmark_client in narwhal/ root
-            # - node in narwhal/node/ directory
-            # IMPORTANT: Do NOT delete the node/ directory (it contains source code)
-            # Only remove the node/node symlink/file if it exists
-            'echo "Creating symlinks..."',
-            # Remove old symlinks/files if they exist (but preserve node/ directory)
+            # Recover from corrupted rustup metadata (e.g. empty settings.toml).
+            'if [ -f "$HOME/.rustup/settings.toml" ] && ! grep -q "^version" "$HOME/.rustup/settings.toml"; '
+            'then echo "Detected corrupted rustup settings.toml; resetting it"; rm -f "$HOME/.rustup/settings.toml"; fi',
+            # Fully reinstall rustup/cargo when rustup is broken or missing.
+            'if ! rustup --version >/dev/null 2>&1; then '
+            'echo "rustup not healthy; performing full reinstall"; '
+            'rm -rf "$HOME/.rustup" "$HOME/.cargo"; '
+            'curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable; '
+            'fi',
+            # Source cargo environment before building
+            'source $HOME/.cargo/env || export PATH=$HOME/.cargo/bin:$PATH',
+            'rustup toolchain install stable || true',
+            'rustup default stable || true',
+            'rustup component add cargo rustc rust-std || true',
+            'cargo build --release --features benchmark',
+            # Keep the node source directory intact; only ensure benchmark_client launcher exists.
             'rm -f benchmark_client 2>/dev/null || true',
-            # Only remove node/node if it's a file or symlink (not a directory)
-            # This preserves the node/ directory which contains source code
-            '[ ! -d node/node ] && rm -f node/node 2>/dev/null || true',
-            # Create benchmark_client symlink in repo root
-            'ln -sf ./target/release/benchmark_client ./benchmark_client',
-            # Create node symlink in node/ directory (node/ directory must exist and not be deleted)
-            'mkdir -p node 2>/dev/null || true',
-            'ln -sf ../target/release/node ./node/node',
-            # Verify symlinks were created (with better error messages)
-            'test -f benchmark_client || (echo "ERROR: benchmark_client symlink not created in repo root" && echo "Current directory: $(pwd)" && echo "Contents of current directory:" && ls -la | grep -E "benchmark" && exit 1)',
-            'test -f node/node || (echo "ERROR: node symlink not created in node/ directory" && echo "Current directory: $(pwd)" && echo "Contents of node directory:" && ls -la node/ | head -10 && exit 1)',
-            'echo "Symlinks created successfully"'
+            'test -f ./target/release/benchmark_client && ln -sf ./target/release/benchmark_client ./benchmark_client || true',
+            'test -x ./target/release/node',
+            'test -x ./target/release/benchmark_client'
         ]
         
         # Modify attack.rs AFTER updating the code (so the file exists)
@@ -727,15 +713,7 @@ class CloudLabBench:
             for (username, port), hostnames in hosts_by_config.items():
                 conn_kwargs = self._get_connection_kwargs({})
                 g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=60)
-                # Don't hide output so we can see compilation and debugging messages
-                result = g.run(' && '.join(cmd), hide=False)
-                # Check for errors in the result
-                if isinstance(result, dict):
-                    for hostname, host_result in result.items():
-                        if not host_result.ok:
-                            Print.error(f'Failed on {hostname}: {host_result.stderr}')
-                elif not result.ok:
-                    Print.error(f'Command failed: {result.stderr}')
+                g.run(' && '.join(cmd), hide=True)
                 
                 # Modify attack.rs AFTER git operations (so the file exists)
                 if trigger_attack is not None:
@@ -759,26 +737,91 @@ class CloudLabBench:
         key_files = [PathMaker.key_file(i) for i in range(len(hosts))]
         local_compilation_success = False
         
-        try:
-            # Recompile the latest code (same as remote.py)
-            cmd = CommandMaker.compile().split()
-            subprocess.run(cmd, check=True, cwd=PathMaker.node_crate_path())
-            local_compilation_success = True
-            
-            # Create alias for the client and nodes binary (same as remote.py)
-            cmd = CommandMaker.alias_binaries(PathMaker.binary_path())
-            subprocess.run([cmd], shell=True)
-            
-            # Generate keys locally
-            for filename in key_files:
-                cmd = CommandMaker.generate_key(filename).split()
-                subprocess.run(cmd, check=True)
-                keys += [Key.from_file(filename)]
+        # Check if node binary exists before attempting local compilation
+        # PathMaker paths are relative to benchmark/ directory (not benchmark/benchmark/)
+        # So '../target/release' means 'target/release' from project root
+        # And '../node' means 'node' from project root
+        node_crate_path = PathMaker.node_crate_path()
+        binary_path = PathMaker.binary_path()
+        
+        # Check multiple possible locations for node binary
+        # Code runs from benchmark/ directory
+        # 1. ../target/release/node (actual binary from project root)
+        # 2. ./node (symlink in benchmark/ directory if exists)
+        # 3. node (if in current directory)
+        import os
+        current_dir = Path.cwd()
+        node_paths = [
+            '../target/release/node',  # From benchmark/ to project root
+            './node',  # Symlink in benchmark/ directory
+            'node',  # If in current directory
+            str(Path(binary_path) / 'node')  # Using PathMaker path
+        ]
+        
+        # Check if any path exists (using os.path for proper symlink resolution)
+        node_exists = False
+        for path_str in node_paths:
+            # First check if path exists at all (including broken symlinks)
+            if os.path.lexists(path_str):
+                # If it's a symlink, we need to resolve it relative to the symlink's directory
+                if os.path.islink(path_str):
+                    # Get the symlink's directory and resolve the target relative to it
+                    symlink_dir = os.path.dirname(os.path.abspath(path_str))
+                    target = os.readlink(path_str)
+                    # Resolve target relative to symlink directory
+                    if not os.path.isabs(target):
+                        resolved = os.path.normpath(os.path.join(symlink_dir, target))
+                    else:
+                        resolved = target
+                    if os.path.exists(resolved) and os.path.isfile(resolved):
+                        node_exists = True
+                        break
+                # If it's a regular file, it exists
+                elif os.path.isfile(path_str):
+                    node_exists = True
+                    break
+            # Also check with exists() for non-symlink files
+            elif os.path.exists(path_str) and os.path.isfile(path_str):
+                node_exists = True
+                break
+        
+        if not node_exists:
+            Print.info('Node binary not found locally, will generate keys on remote nodes...')
+        else:
+            try:
+                # Recompile the latest code (same as remote.py)
+                # node_crate_path from PathMaker is '../node' relative to benchmark/ directory
+                # This is correct: from benchmark/ to project root/node
+                cmd = CommandMaker.compile().split()
+                subprocess.run(cmd, check=True, cwd=node_crate_path)
+                local_compilation_success = True
                 
-        except (FileNotFoundError, subprocess.CalledProcessError) as e:
-            # If cargo is not available locally (e.g., on Windows), generate keys on remote nodes
-            Print.warn(f'Local compilation failed (this is OK if cargo is not available): {e}')
+                # Create alias for the client and nodes binary (same as remote.py)
+                # This creates symlinks in the current directory (benchmark/)
+                # binary_path is '../target/release' relative to benchmark/ directory
+                # This is correct: from benchmark/ to project root/target/release
+                cmd = CommandMaker.alias_binaries(binary_path)
+                subprocess.run([cmd], shell=True)
+                
+                # Generate keys locally
+                # CommandMaker.generate_key uses './node', so we need to be in a directory where ./node exists
+                # After alias_binaries, ./node should exist in current directory (benchmark/)
+                # Get the current working directory (benchmark/)
+                current_dir = Path.cwd()
+                for filename in key_files:
+                    cmd = CommandMaker.generate_key(filename).split()
+                    # Run from current directory where ./node should exist after alias_binaries
+                    subprocess.run(cmd, check=True, cwd=current_dir)
+                    keys += [Key.from_file(filename)]
+                    
+            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                # If cargo is not available locally (e.g., on Windows), generate keys on remote nodes
+                Print.warn(f'Local compilation failed (this is OK if cargo is not available): {e}')
+                Print.info('Generating keys on remote nodes instead...')
+        
+        if not local_compilation_success:
             Print.info('Generating keys on remote nodes instead...')
+            Print.info(f'Need to generate {len(key_files)} key files for {len(hosts)} hosts')
             
             # Generate keys on the first remote host (they're the same for all)
             repo_name = self.settings.repo_name
@@ -789,54 +832,98 @@ class CloudLabBench:
             conn_kwargs = self._get_connection_kwargs({})
             
             try:
+                Print.info(f'Connecting to {username}@{hostname}:{port} to generate keys...')
                 conn = Connection(hostname, user=username, port=port, 
                                  connect_kwargs=conn_kwargs, connect_timeout=30)
+                conn.open()
                 
                 # Generate keys on remote node (code should already be compiled from _update)
-                # First, get the actual home directory from remote
-                home_result = conn.run('echo $HOME', hide=True, warn=True)
-                remote_home = home_result.stdout.strip() if home_result.ok else '~'
-                
                 for i, key_file in enumerate(key_files):
-                    # Use absolute path for key file on remote (expand $HOME)
-                    remote_key_path = f'{remote_home}/{repo_name}/{key_file}'
+                    Print.info(f'Generating key {i+1}/{len(key_files)}: {key_file}')
+                    # Generate into the repo root after `cd {repo_name}`.
+                    remote_key_filename = key_file
+                    remote_key_path = f'{repo_name}/{key_file}'
                     # Generate key using the compiled node binary
-                    # node binary is in node/ directory, benchmark_client is in repo root
-                    # Use absolute path and ensure we're in the correct directory
-                    # Try node/node first, then fallback to target/release/node
-                    # Remove any stale .cargo-lock files (may require sudo if owned by root)
-                    # The .cargo-lock error is usually harmless (just a warning from Cargo)
-                    # Try to remove with sudo first, then without sudo
-                    cmd = f'cd {remote_home}/{repo_name} && (sudo rm -f target/release/.cargo-lock 2>/dev/null || rm -f target/release/.cargo-lock 2>/dev/null || true) && CARGO_HOME={remote_home}/.cargo ./node/node generate_keys --filename {remote_key_path} 2>&1 | grep -v "failed to open.*cargo-lock" || true'
+                    # The binary should exist after _update compiles the code
+                    cmd = f'cd {repo_name} && ./node generate_keys --filename {remote_key_filename}'
+                    Print.info(f'Running command: {cmd}')
                     result = conn.run(cmd, hide=True, warn=True)
-                    # Check if key file was actually created (more reliable than exit code)
-                    key_check = conn.run(f'test -f {remote_key_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
-                    if 'FAIL' in key_check.stdout or not result.ok:
-                        # Try with target/release/node if ./node/node doesn't exist
-                        cmd = f'cd {remote_home}/{repo_name} && (sudo rm -f target/release/.cargo-lock 2>/dev/null || rm -f target/release/.cargo-lock 2>/dev/null || true) && CARGO_HOME={remote_home}/.cargo ./target/release/node generate_keys --filename {remote_key_path} 2>&1 | grep -v "failed to open.*cargo-lock" || true'
-                        result = conn.run(cmd, hide=True, warn=True)
-                        # Verify key file was created
-                        key_check = conn.run(f'test -f {remote_key_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
-                        if 'FAIL' in key_check.stdout:
-                            raise BenchError(f'Failed to generate key file {remote_key_path} on {hostname}')
+                    if not result.ok:
+                        # Try with target/release/node if ./node doesn't exist
+                        Print.info(f'First attempt failed, trying with target/release/node...')
+                        cmd = f'cd {repo_name} && ./target/release/node generate_keys --filename {remote_key_filename}'
+                        result = conn.run(cmd, hide=True)
                     
-                    # Download the key file - ensure local directory exists
-                    import os
-                    local_key_dir = os.path.dirname(key_file) if os.path.dirname(key_file) else '.'
-                    if local_key_dir and not os.path.exists(local_key_dir):
-                        os.makedirs(local_key_dir, exist_ok=True)
-                    conn.get(remote_key_path, key_file)
+                    if not result.ok:
+                        error_msg = f'Failed to generate key file {key_file} on remote node: {result.stderr}'
+                        Print.error(f'  ✗ {error_msg}')
+                        raise BenchError(error_msg, RuntimeError(error_msg))
+                    
+                    Print.info(f'  ✓ Key generated on remote node')
+                    
+                    # Download the key file
+                    Print.info(f'Downloading key file {key_file}...')
+                    try:
+                        conn.get(remote_key_path, key_file)
+                        Print.info(f'  ✓ Key file downloaded: {key_file}')
+                    except Exception as e:
+                        error_msg = f'Failed to download key file {key_file} from remote node: {e}'
+                        Print.error(f'  ✗ {error_msg}')
+                        raise BenchError(error_msg, e)
                 
-                # Load all keys
+                # Load all keys and verify we have the correct number
+                Print.info(f'Loading {len(key_files)} key files...')
                 for key_file in key_files:
+                    key_path = Path(key_file)
+                    if not key_path.exists():
+                        error_msg = f'Key file {key_file} was not downloaded successfully'
+                        Print.error(f'  ✗ {error_msg}')
+                        raise BenchError(error_msg, FileNotFoundError(error_msg))
+                    Print.info(f'  ✓ Loading key from {key_file}')
                     keys += [Key.from_file(key_file)]
+                
+                Print.info(f'Successfully generated and loaded {len(keys)} keys')
+                
+                if len(keys) != len(hosts):
+                    error_msg = (
+                        f'Generated {len(keys)} keys but need {len(hosts)} keys for {len(hosts)} hosts. '
+                        f'Key files: {key_files}'
+                    )
+                    raise BenchError(error_msg, ValueError(error_msg))
+                
+                conn.close()
                     
             except Exception as e:
-                raise BenchError('Failed to generate keys on remote nodes. Please ensure the code is compiled on remote nodes.', e)
+                error_msg = f'Failed to generate keys on remote nodes. Please ensure the code is compiled on remote nodes. Error: {e}'
+                Print.warn(error_msg)
+                Print.warn(f'Keys generated so far: {len(keys)}/{len(key_files)}')
+                Print.warn(f'Key files expected: {key_files}')
+                if hasattr(e, '__traceback__'):
+                    import traceback
+                    Print.warn('Full traceback:')
+                    traceback.print_exc()
+                raise BenchError(error_msg, e)
+        
+        # Final check: ensure we have keys before proceeding
+        if len(keys) == 0:
+            error_msg = (
+                f'No keys were generated. Local compilation failed and remote generation also failed. '
+                f'Please ensure either: (1) node binary exists locally, or (2) remote nodes have compiled code.'
+            )
+            raise BenchError(error_msg, RuntimeError(error_msg))
         
         # Create addresses dict for Committee
         # Format: {name: [primary_host, worker1_host, worker2_host, ...]}
         addresses = OrderedDict()
+        
+        # Verify that we have the same number of keys and hosts
+        if len(keys) != len(hosts):
+            error_msg = (
+                f'Mismatch between number of keys ({len(keys)}) and hosts ({len(hosts)}). '
+                f'Expected {len(hosts)} keys for {len(hosts)} hosts.'
+            )
+            raise BenchError(error_msg, ValueError(error_msg))
+        
         for i, key in enumerate(keys):
             host = hosts[i]
             hostname = host['hostname']
@@ -854,8 +941,27 @@ class CloudLabBench:
             
             addresses[key.name] = [hostname] + worker_hosts
         
-        committee = Committee(addresses, self.settings.base_port)
-        committee.print(PathMaker.committee_file())  # 改为 print() 而不是 save()
+        # Verify all address lists have the same length before creating Committee
+        lengths = [len(x) for x in addresses.values()]
+        if len(set(lengths)) != 1:
+            error_msg = (
+                f'Address lists have inconsistent lengths: {lengths}. '
+                f'All nodes must have the same number of workers. '
+                f'Addresses: {dict(addresses)}'
+            )
+            raise BenchError(error_msg, ValueError(error_msg))
+        
+        solid_step_length = node_parameters.json.get('solid_step_length', 2)
+        solid_step_number = node_parameters.json.get('solid_step_number', 1)
+        solid_reference = node_parameters.json.get('reference', 3)
+        committee = Committee(
+            addresses,
+            self.settings.base_port,
+            solid_step_length,
+            solid_step_number,
+            solid_reference,
+        )
+        committee.print(PathMaker.committee_file())
         
         node_parameters.print(PathMaker.parameters_file())  # 改为 print() 而不是 save()
         
@@ -880,8 +986,46 @@ class CloudLabBench:
                 port = host.get('port', 22)
                 conn_kwargs = self._get_connection_kwargs({})
                 conn = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs)
-                for local, remote in files_to_upload:
-                    conn.put(local, remote)
+                current_local = None
+                current_remote = None
+                current_local_size = None
+                try:
+                    for local, remote in files_to_upload:
+                        current_local = local
+                        current_remote = remote
+                        local_path = Path(local)
+                        current_local_size = local_path.stat().st_size if local_path.exists() else None
+                        Print.info(
+                            f'Uploading {local} ({current_local_size} bytes) '
+                            f'to {username}@{hostname}:{remote}'
+                        )
+                        conn.put(local, remote)
+                except Exception as upload_error:
+                    diagnostics = []
+                    if current_remote:
+                        remote_parent = str(Path(current_remote).parent)
+                        # Gather quick remote diagnostics to explain common upload failures.
+                        cmd = (
+                            f'echo "pwd=$(pwd)"; '
+                            f'echo "remote_parent={shlex.quote(remote_parent)}"; '
+                            f'ls -ld {shlex.quote(remote_parent)} || true; '
+                            f'df -h {shlex.quote(remote_parent)} || true; '
+                            f'df -i {shlex.quote(remote_parent)} || true'
+                        )
+                        result = conn.run(cmd, hide=True, warn=True)
+                        diagnostics.append(result.stdout.strip())
+
+                    details = (
+                        f'Upload failed on host {username}@{hostname}:{port}. '
+                        f'local={current_local}, remote={current_remote}, '
+                        f'local_size={current_local_size}. '
+                        f'Original error: {upload_error}'
+                    )
+                    if diagnostics:
+                        details += f'\nRemote diagnostics:\n{diagnostics[0]}'
+                    raise BenchError(details, upload_error)
+                finally:
+                    conn.close()
         except Exception as e:
             raise BenchError('Failed to upload configuration files', e)
         
@@ -928,17 +1072,11 @@ class CloudLabBench:
         
         try:
             run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
-            # Use system Python instead of hardcoded path
-            import shutil
-            python_cmd = shutil.which('python3') or sys.executable
-            if not python_cmd:
-                Print.warn('⚠ Could not find python3, skipping run_cloudlab_benchmark.py')
-                return
             
             if run_benchmark_script.exists():
                 Print.info('Running run_cloudlab_benchmark.py --no-run to process logs...')
                 result = subprocess.run(
-                    [python_cmd, str(run_benchmark_script), '--no-run'],
+                    [sys.executable, str(run_benchmark_script), '--no-run'],
                     cwd=str(benchmark_dir),
                     capture_output=False,  # Show output in real-time
                     text=True
@@ -975,12 +1113,36 @@ class CloudLabBench:
         Print.info(f'Starting {name} on {hostname}...')
         c = Connection(hostname, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=30)
         try:
-            # First verify the repo directory and binaries exist
-            # benchmark_client should be in repo root, node should be in node/ directory
-            test_cmd = f'cd {repo_name} && test -f benchmark_client && test -f node/node && echo "Binaries found" || echo "Binaries missing"'
-            test_result = c.run(test_cmd, hide=True)
+            # Ensure repo binaries exist on this host. Some hosts only have target/release/*
+            # and some may need a one-time build; normalize by creating root-level symlinks.
+            test_cmd = (
+                f'cd {repo_name} && '
+                '((test -x ./target/release/node) && '
+                '(test -x ./benchmark_client || test -x ./target/release/benchmark_client) && '
+                'echo "Binaries found") || echo "Binaries missing"'
+            )
+            test_result = c.run(test_cmd, hide=True, warn=True)
             if 'Binaries missing' in test_result.stdout:
-                Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}')
+                Print.warn(f'  ⚠ Binaries not found in {repo_name} on {hostname}; attempting build...')
+                ensure_binaries_cmd = f'''cd {repo_name} && (
+if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
+if [ ! -f ./target/release/node ] || [ ! -f ./target/release/benchmark_client ]; then
+    if rustup run stable cargo --version >/dev/null 2>&1; then
+        rustup run stable cargo build --release --bin node --bin benchmark_client
+    else
+        cargo build --release --bin node --bin benchmark_client
+    fi
+fi
+[ -f ./target/release/benchmark_client ] && [ ! -f ./benchmark_client ] && ln -sf ./target/release/benchmark_client ./benchmark_client || true
+test -x ./target/release/node && (test -x ./benchmark_client || test -x ./target/release/benchmark_client)
+)'''
+                ensure_result = c.run(ensure_binaries_cmd, hide=True, warn=True)
+                if not ensure_result.ok:
+                    error_msg = (
+                        f'Binaries are missing on {hostname} and automatic build failed. '
+                        'Please run cloudlab-install to compile binaries on all nodes.'
+                    )
+                    raise BenchError(error_msg, RuntimeError((ensure_result.stderr or ensure_result.stdout).strip()))
             
             # Ensure log directory exists
             from os.path import dirname
@@ -995,21 +1157,18 @@ class CloudLabBench:
             store_match = re.search(r'--store\s+(\S+)', command)
             store_path = store_match.group(1) if store_match else None
             
-            # Modify command for worker/primary: replace ./node with ./node/node
-            # For client, command stays as-is (uses ./benchmark_client in repo root)
-            if name.startswith('worker-') or name.startswith('primary-'):
-                command_modified = command.replace('./node ', './node/node ')
-            else:
-                command_modified = command
-            
+            # Resolve command binary path on remote host. In repo root, "node" is a directory,
+            # so "./node" may be invalid; prefer target/release binaries.
+            resolved_command = command
+            if command.startswith('./node '):
+                resolved_command = command.replace('./node ', '${NODE_BIN} ', 1)
+            elif command.startswith('./benchmark_client '):
+                resolved_command = command.replace('./benchmark_client ', '${CLIENT_BIN} ', 1)
+
             # Write script with better error handling
             # Use relative path after cd to repo directory
             # log_file is already relative (e.g., "logs/client-0-0.log")
-            # store_path is relative to repo root (we're running in repo root now)
-            if store_path:
-                cleanup_store = f'rm -rf {store_path} 2>/dev/null || true'
-            else:
-                cleanup_store = ''
+            cleanup_store = f'rm -rf {store_path} 2>/dev/null || true' if store_path else ''
             script_cmd = f'''cat > {script_path} << 'SCRIPTEOF'
 #!/bin/bash
 # Change to repo directory first
@@ -1019,60 +1178,64 @@ cd {repo_name} || {{
     exit 1
 }}
 
-# Ensure log directory exists (relative to repo root)
+# Ensure log directory exists (relative to repo directory)
 mkdir -p $(dirname {log_file}) 2>/dev/null || true
 
 # Cleanup database directory and lock files before starting
 {cleanup_store}
 
-# Check if binary exists (for client/worker/primary)
-# benchmark_client is in repo root, node is in node/ directory
+# Resolve runtime binaries (for client/worker/primary)
 if [[ "{name}" == client-* ]]; then
-    if [ ! -f "./benchmark_client" ] && [ ! -f "./target/release/benchmark_client" ]; then
-        echo "ERROR: benchmark_client not found in repo root" | tee {log_file}
+    if [ -x "./benchmark_client" ]; then
+        CLIENT_BIN="./benchmark_client"
+    elif [ -x "./target/release/benchmark_client" ]; then
+        CLIENT_BIN="./target/release/benchmark_client"
+    else
+        echo "ERROR: benchmark_client not found" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
-        echo "Files in current dir: $(ls -la | grep benchmark | head -10)" | tee -a {log_file}
+        echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
         exit 1
     fi
 elif [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
-    if [ ! -f "./node/node" ] && [ ! -f "./target/release/node" ]; then
-        echo "ERROR: node binary not found in node/ directory" | tee {log_file}
+    if [ -x "./target/release/node" ]; then
+        NODE_BIN="./target/release/node"
+    elif [ -x "./node" ] && [ ! -d "./node" ]; then
+        NODE_BIN="./node"
+    else
+        echo "ERROR: node binary not found" | tee {log_file}
         echo "Looking in: $(pwd)" | tee -a {log_file}
-        echo "Contents of node directory: $(ls -la node/ 2>/dev/null | head -10)" | tee -a {log_file}
+        echo "Files in current dir: $(ls -la | head -10)" | tee -a {log_file}
         exit 1
     fi
 fi
 
 # Open log file and redirect stdout/stderr to it BEFORE exec
 # This ensures the file is created and opened before the process starts
+# Use relative path since we're already in the repo directory
 exec > {log_file} 2>&1
 
 # Execute the command
-# Replace ./node with ./node/node for worker/primary commands
-# benchmark_client is already in repo root, so no change needed
-if [[ "{name}" == worker-* ]] || [[ "{name}" == primary-* ]]; then
-    # Use modified command with ./node/node
-    exec {command_modified}
-else
-    # For client, use command as-is (benchmark_client is in repo root)
-    exec {command}
-fi
+# Use exec to replace shell with the actual process
+exec {resolved_command}
 SCRIPTEOF'''
             script_write_result = c.run(script_cmd, hide=True, warn=True)
             if not script_write_result.ok:
-                Print.error(f'  ✗ Failed to create script: {script_write_result.stderr}')
-                raise BenchError(f'Failed to create script for {name} on {hostname}')
+                Print.warn(f'  ✗ Failed to create script: {script_write_result.stderr}')
+                error_msg = f'Failed to create script for {name} on {hostname}'
+                raise BenchError(error_msg, RuntimeError(error_msg))
             
             chmod_result = c.run(f'chmod +x {script_path}', hide=True, warn=True)
             if not chmod_result.ok:
-                Print.error(f'  ✗ Failed to make script executable: {chmod_result.stderr}')
-                raise BenchError(f'Failed to make script executable for {name} on {hostname}')
+                Print.warn(f'  ✗ Failed to make script executable: {chmod_result.stderr}')
+                error_msg = f'Failed to make script executable for {name} on {hostname}'
+                raise BenchError(error_msg, RuntimeError(error_msg))
             
             # Verify script was created correctly
             verify_script = c.run(f'test -f {script_path} && echo "OK" || echo "FAIL"', hide=True, warn=True)
             if 'FAIL' in verify_script.stdout:
-                Print.error(f'  ✗ Script file {script_path} was not created')
-                raise BenchError(f'Script file not created for {name} on {hostname}')
+                Print.warn(f'  ✗ Script file {script_path} was not created')
+                error_msg = f'Script file not created for {name} on {hostname}'
+                raise BenchError(error_msg, FileNotFoundError(error_msg))
             
             # Use nohup to run the script in background
             # Use setsid to create a new session and detach from terminal
@@ -1081,13 +1244,15 @@ SCRIPTEOF'''
             nohup_result = c.run(nohup_cmd, hide=True, warn=True)
             
             if not nohup_result.ok:
-                Print.error(f'  ✗ Failed to start {name}: {nohup_result.stderr}')
-                raise BenchError(f'Failed to start {name} on {hostname}')
+                Print.warn(f'  ✗ Failed to start {name}: {nohup_result.stderr}')
+                error_msg = f'Failed to start {name} on {hostname}'
+                raise BenchError(error_msg, RuntimeError(error_msg))
             
             pid = nohup_result.stdout.strip()
             if not pid or not pid.isdigit():
-                Print.error(f'  ✗ Failed to get PID for {name}')
-                raise BenchError(f'Failed to start {name} on {hostname}')
+                Print.warn(f'  ✗ Failed to get PID for {name}')
+                error_msg = f'Failed to start {name} on {hostname}'
+                raise BenchError(error_msg, ValueError(error_msg))
             
             Print.info(f'  ✓ {name} started on {hostname} (PID: {pid})')
             
@@ -1134,8 +1299,9 @@ SCRIPTEOF'''
                 Print.info(f'  ✓ Process {pid} is running')
                 
         except Exception as e:
-            Print.error(f'  ✗ Failed to start {name} on {hostname}: {e}')
-            raise
+            if isinstance(e, BenchError):
+                raise
+            raise BenchError(f'Failed to start {name} on {hostname}', e)
     
     def _get_host_by_address(self, address, selected_hosts):
         """Get host info by extracting IP from address"""
@@ -1175,9 +1341,8 @@ SCRIPTEOF'''
         
         return None
     
-    def _run_single(self, rate, committee, bench_parameters, selected_hosts, debug=False):
+    def _run_single(self, rate, committee, bench_parameters, node_parameters, selected_hosts, debug=False):
         """Run a single benchmark iteration (CloudLab), mirroring logic from Bench._run_single"""
-        from math import ceil
         from time import sleep
 
         faults = bench_parameters.faults
@@ -1195,22 +1360,180 @@ SCRIPTEOF'''
         # 2. Run the clients first (they will wait for the nodes to be ready)
         #    This mirrors benchmark/benchmark/remote.py::_run_single
         Print.info('Booting clients...')
-        rate_share = ceil(rate / committee.workers())
-        for i, addresses in enumerate(workers_addresses):
-            for (id, address) in addresses:
-                host_info = self._get_host_by_address(address, selected_hosts)
-                if not host_info:
-                    Print.warn(f'Could not find host for address {address}')
-                    continue
-
-                cmd = CommandMaker.run_client(
-                    address,
-                    bench_parameters.tx_size,
-                    rate_share,
-                    [x for y in workers_addresses for _, x in y]
+        workers_total = committee.workers()
+        num_nodes = len(workers_addresses)
+        
+        if bench_parameters.rate_type == 'balanced':
+            rate_share = ceil(rate / workers_total)
+            worker_rates = [rate_share] * workers_total
+            worker_index = 0
+            for i, addresses in enumerate(workers_addresses):
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    client_rate = worker_rates[min(worker_index, len(worker_rates) - 1)]
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        client_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+                    worker_index += 1
+        elif bench_parameters.rate_type in ('imbalanced', 'imbalance'):
+            s = node_parameters.json.get('s')
+            if s is None:
+                raise BenchError(
+                    'rate_type=imbalanced requires node parameters "s" and "v"',
+                    ValueError('Missing Zipf parameters s/v')
                 )
-                log_file = PathMaker.client_log_file(i, id)
-                self._background_run(host_info, cmd, log_file)
+            try:
+                worker_rates = ZipfAllocator(rate, workers_total, float(s)).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate imbalanced client rates', e)
+            Print.info(f'Client rates (Zipf, s={s}): {worker_rates}')
+            worker_index = 0
+            for i, addresses in enumerate(workers_addresses):
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    client_rate = worker_rates[min(worker_index, len(worker_rates) - 1)]
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        client_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+                    worker_index += 1
+        elif bench_parameters.rate_type == 'extreme':
+            # Extreme workload: allocate by nodes, then each node's workers share the node rate
+            try:
+                node_rates = ExtremeAllocator(rate, num_nodes).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate extreme node rates', e)
+            Print.info(f'Node rates (Extreme: first node ~99%, others share the rest): {node_rates}')
+            for i, addresses in enumerate(workers_addresses):
+                node_rate = node_rates[i]
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    # Each worker in a node uses the same node rate (consistent with local.py)
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        node_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+        elif bench_parameters.rate_type == 'extreme_x':
+            # Extreme(x): first x nodes each get 20%, others share the rest (by nodes)
+            x = getattr(bench_parameters, 'extreme_x', None)
+            if x is None:
+                raise BenchError('rate_type=extreme_x requires bench parameter \"extreme_x\"', ConfigError('missing extreme_x'))
+            try:
+                node_rates = ExtremeXAllocator(rate, num_nodes, x).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate extreme_x node rates', e)
+            Print.info(f'Node rates (ExtremeX x={x}): {node_rates}')
+            for i, addresses in enumerate(workers_addresses):
+                node_rate = node_rates[i]
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        node_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+        elif bench_parameters.rate_type == 'pareto':
+            # Pareto-style workload: top3 share 75%, others share 25% (by nodes)
+            try:
+                node_rates = ParetoAllocator(rate, num_nodes).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate pareto node rates', e)
+            Print.info(f'Node rates (Pareto top3=75%, others=25%): {node_rates}')
+            for i, addresses in enumerate(workers_addresses):
+                node_rate = node_rates[i]
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        node_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+        elif bench_parameters.rate_type == 'twoheavy':
+            # Two-heavy workload: first two nodes share 70%, others share 30% (by nodes)
+            try:
+                node_rates = TwoHeavyAllocator(rate, num_nodes).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate twoheavy node rates', e)
+            Print.info(f'Node rates (TwoHeavy first2=70%, others=30%): {node_rates}')
+            for i, addresses in enumerate(workers_addresses):
+                node_rate = node_rates[i]
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        node_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+        elif bench_parameters.rate_type == 'custom':
+            # Custom workload: allocate based on specified percentages
+            percentages = getattr(bench_parameters, 'percentages', None)
+            if percentages is None:
+                raise BenchError('rate_type=custom requires bench parameter "percentages"', ConfigError('missing percentages'))
+            try:
+                node_rates = CustomAllocator(rate, num_nodes, percentages).allocate()
+            except Exception as e:
+                raise BenchError('Failed to allocate custom node rates', e)
+            Print.info(f'Node rates (Custom percentages={percentages}): {node_rates}')
+            for i, addresses in enumerate(workers_addresses):
+                node_rate = node_rates[i]
+                for (id, address) in addresses:
+                    host_info = self._get_host_by_address(address, selected_hosts)
+                    if not host_info:
+                        Print.warn(f'Could not find host for address {address}')
+                        continue
+                    cmd = CommandMaker.run_client(
+                        address,
+                        bench_parameters.tx_size,
+                        node_rate,
+                        [x for y in workers_addresses for _, x in y]
+                    )
+                    log_file = PathMaker.client_log_file(i, id)
+                    self._background_run(host_info, cmd, log_file)
+        else:
+            raise BenchError(
+                f'Unknown rate_type "{bench_parameters.rate_type}" (expected "balanced", "imbalanced", "extreme", "extreme_x", "pareto", "twoheavy", or "custom")',
+                ValueError('Invalid rate_type')
+            )
 
         # 3. Run the primaries (except the faulty ones) – same order as Bench._run_single
         Print.info('Booting primaries...')
@@ -1250,204 +1573,17 @@ SCRIPTEOF'''
                 log_file = PathMaker.worker_log_file(i, id)
                 self._background_run(host_info, cmd, log_file)
 
-        # 5. Wait for all transactions to be processed (progress output with log monitoring)
+        # 5. Wait for all transactions to be processed (progress output)
         duration = bench_parameters.duration
         Print.info(f'Running benchmark ({duration} sec)...')
-        
-        # Monitor logs for new round information (similar to local execution)
-        repo_name = self.settings.repo_name
-        last_line_counts = {}  # Track last line count per node to show only new lines
-        
+        # Calculate sleep interval to ensure exact duration
+        sleep_interval = duration / 20.0
         for i in range(20):
-            sleep(ceil(duration / 20))
-            
-            # Check for new log lines every iteration (to show round information like local)
-            for j, address in enumerate(committee.primary_addresses(faults)):
-                host_info = self._get_host_by_address(address, selected_hosts)
-                if not host_info:
-                    continue
-                
-                try:
-                    log_file = PathMaker.primary_log_file(j)
-                    remote_log = f'{repo_name}/{log_file}'
-                    username = host_info.get('username', 'root')
-                    hostname = host_info['hostname']
-                    port = host_info.get('port', 22)
-                    conn_kwargs = self._get_connection_kwargs({})
-                    
-                    c = Connection(hostname, user=username, port=port, 
-                                 connect_kwargs=conn_kwargs, connect_timeout=10)
-                    
-                    # Get current line count
-                    line_count_cmd = f'test -f {remote_log} && wc -l < {remote_log} || echo 0'
-                    line_count_result = c.run(line_count_cmd, hide=True, warn=True, timeout=5)
-                    
-                    if line_count_result.ok:
-                        current_count = int(line_count_result.stdout.strip() or 0)
-                        last_count = last_line_counts.get(j, 0)
-                        
-                        # Show new lines (especially those containing round information)
-                        if current_count > last_count:
-                            # Get new lines
-                            new_lines_cmd = f'test -f {remote_log} && tail -n +{last_count + 1} {remote_log} | tail -20 || echo ""'
-                            new_lines_result = c.run(new_lines_cmd, hide=True, warn=True, timeout=5)
-                            
-                            if new_lines_result.ok and new_lines_result.stdout.strip():
-                                new_lines = new_lines_result.stdout.strip().split('\n')
-                                for line in new_lines:
-                                    if line.strip():
-                                        # Show lines containing round, committed, or created (similar to local output)
-                                        if any(keyword in line.lower() for keyword in ['round', 'committed', 'created', 'dag']):
-                                            Print.info(f'  Node {j}: {line[:120]}')  # Show first 120 chars
-                            
-                            last_line_counts[j] = current_count
-                    
-                    c.close()
-                except Exception:
-                    pass  # Ignore errors in log monitoring
-            
-            # Show progress every 5 iterations
+            sleep(sleep_interval)
             if (i + 1) % 5 == 0:
                 Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
 
         # 6. Kill processes but keep logs (same intent as Bench._run_single)
-        self.kill(hosts=selected_hosts, delete_logs=False)
-    
-    def _run_single_imbalanced(self, imbalanced_rate_list, committee, bench_parameters, selected_hosts, debug=False):
-        """Run a single benchmark with imbalanced rates (different rate per node)"""
-        from math import ceil
-        from time import sleep
-
-        faults = bench_parameters.faults
-
-        # 1. Kill any potentially unfinished run and delete logs
-        Print.info('Killing any existing processes and ports...')
-        self.kill(hosts=selected_hosts, delete_logs=True, committee=committee, faults=faults)
-
-        # Small delay to ensure processes are killed and database cleanup completes
-        sleep(3)
-
-        # Pre-compute workers' addresses (filtered for faults)
-        workers_addresses = committee.workers_addresses(faults)
-
-        # 2. Run the clients first with imbalanced rates
-        Print.info('Booting clients...')
-        client_rates = imbalanced_rate_list
-        for i, addresses in enumerate(workers_addresses):
-            for (id, address) in addresses:
-                host_info = self._get_host_by_address(address, selected_hosts)
-                if not host_info:
-                    Print.warn(f'Could not find host for address {address}')
-                    continue
-
-                cmd = CommandMaker.run_client(
-                    address,
-                    bench_parameters.tx_size,
-                    client_rates[i],
-                    [x for y in workers_addresses for _, x in y]
-                )
-                log_file = PathMaker.client_log_file(i, id)
-                self._background_run(host_info, cmd, log_file)
-
-        # 3. Run the primaries (except the faulty ones)
-        Print.info('Booting primaries...')
-        for i, address in enumerate(committee.primary_addresses(faults)):
-            host_info = self._get_host_by_address(address, selected_hosts)
-            if not host_info:
-                Print.warn(f'Could not find host for address {address}')
-                continue
-
-            cmd = CommandMaker.run_primary(
-                PathMaker.key_file(i),
-                PathMaker.committee_file(),
-                PathMaker.db_path(i),
-                PathMaker.parameters_file(),
-                debug=debug
-            )
-            log_file = PathMaker.primary_log_file(i)
-            self._background_run(host_info, cmd, log_file)
-
-        # 4. Run the workers (except the faulty ones)
-        Print.info('Booting workers...')
-        for i, addresses in enumerate(workers_addresses):
-            for (id, address) in addresses:
-                host_info = self._get_host_by_address(address, selected_hosts)
-                if not host_info:
-                    Print.warn(f'Could not find host for address {address}')
-                    continue
-
-                cmd = CommandMaker.run_worker(
-                    PathMaker.key_file(i),
-                    PathMaker.committee_file(),
-                    PathMaker.db_path(i, id),
-                    PathMaker.parameters_file(),
-                    id,  # The worker's id.
-                    debug=debug
-                )
-                log_file = PathMaker.worker_log_file(i, id)
-                self._background_run(host_info, cmd, log_file)
-
-        # 5. Wait for all transactions to be processed (progress output with log monitoring)
-        duration = bench_parameters.duration
-        Print.info(f'Running benchmark ({duration} sec)...')
-        
-        # Monitor logs for new round information (similar to local execution)
-        repo_name = self.settings.repo_name
-        last_line_counts = {}  # Track last line count per node to show only new lines
-        
-        for i in range(20):
-            sleep(ceil(duration / 20))
-            
-            # Check for new log lines every iteration (to show round information like local)
-            for j, address in enumerate(committee.primary_addresses(faults)):
-                host_info = self._get_host_by_address(address, selected_hosts)
-                if not host_info:
-                    continue
-                
-                try:
-                    log_file = PathMaker.primary_log_file(j)
-                    remote_log = f'{repo_name}/{log_file}'
-                    username = host_info.get('username', 'root')
-                    hostname = host_info['hostname']
-                    port = host_info.get('port', 22)
-                    conn_kwargs = self._get_connection_kwargs({})
-                    
-                    c = Connection(hostname, user=username, port=port, 
-                                 connect_kwargs=conn_kwargs, connect_timeout=10)
-                    
-                    # Get current line count
-                    line_count_cmd = f'test -f {remote_log} && wc -l < {remote_log} || echo 0'
-                    line_count_result = c.run(line_count_cmd, hide=True, warn=True, timeout=5)
-                    
-                    if line_count_result.ok:
-                        current_count = int(line_count_result.stdout.strip() or 0)
-                        last_count = last_line_counts.get(j, 0)
-                        
-                        # Show new lines (especially those containing round information)
-                        if current_count > last_count:
-                            # Get new lines
-                            new_lines_cmd = f'test -f {remote_log} && tail -n +{last_count + 1} {remote_log} | tail -20 || echo ""'
-                            new_lines_result = c.run(new_lines_cmd, hide=True, warn=True, timeout=5)
-                            
-                            if new_lines_result.ok and new_lines_result.stdout.strip():
-                                new_lines = new_lines_result.stdout.strip().split('\n')
-                                for line in new_lines:
-                                    if line.strip():
-                                        # Show lines containing round, committed, or created (similar to local output)
-                                        if any(keyword in line.lower() for keyword in ['round', 'committed', 'created', 'dag']):
-                                            Print.info(f'  Node {j}: {line[:120]}')  # Show first 120 chars
-                            
-                            last_line_counts[j] = current_count
-                    
-                    c.close()
-                except Exception:
-                    pass  # Ignore errors in log monitoring
-            
-            # Show progress every 5 iterations
-            if (i + 1) % 5 == 0:
-                Print.info(f'  Progress: {((i + 1) * 100) // 20}%')
-
-        # 6. Kill processes but keep logs
         self.kill(hosts=selected_hosts, delete_logs=False)
     
     def _check_stderr(self, output):
@@ -1501,13 +1637,7 @@ SCRIPTEOF'''
         
         # Run benchmarks for each combination of parameters
         for n in bench_parameters.nodes:
-            if bench_parameters.rate_type == 'balanced':
-                rate_list = bench_parameters.rate
-            else:  # imbalanced
-                # For imbalanced, we run once with the imbalanced_rate list
-                rate_list = [bench_parameters.imbalanced_rate]
-            
-            for rate in rate_list:
+            for rate in bench_parameters.rate:
                 for trigger_attack in trigger_attack_list:
                     # Update nodes (this will also modify attack.rs if trigger_attack is specified)
                     try:
@@ -1535,24 +1665,13 @@ SCRIPTEOF'''
                     # Run benchmarks for this configuration
                     for run in range(bench_parameters.runs):
                         attack_str = f", attack={'ON' if trigger_attack else 'OFF'}" if trigger_attack is not None else ""
-                        if bench_parameters.rate_type == 'balanced':
-                            rate_str = f'rate={rate}'
-                            rate_for_file = rate
-                        else:  # imbalanced
-                            rate_str = f'imbalanced_rates={rate}'
-                            rate_for_file = sum(rate) if isinstance(rate, list) else rate
-                        Print.heading(f'\nRunning benchmark: nodes={n}, {rate_str}{attack_str}, run={run+1}/{bench_parameters.runs}')
+                        Print.heading(f'\nRunning benchmark: nodes={n}, rate={rate}{attack_str}, run={run+1}/{bench_parameters.runs}')
                         
                         try:
                             # Run the actual benchmark
-                            if bench_parameters.rate_type == 'balanced':
-                                self._run_single(
-                                    rate, committee_copy, bench_parameters, selected_hosts, debug
-                                )
-                            else:  # imbalanced
-                                self._run_single_imbalanced(
-                                    rate, committee_copy, bench_parameters, selected_hosts, debug
-                                )
+                            self._run_single(
+                                rate, committee_copy, bench_parameters, node_parameters, selected_hosts, debug
+                            )
                             
                             # Download and parse logs
                             result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
@@ -1561,7 +1680,7 @@ SCRIPTEOF'''
                                 n,
                                 bench_parameters.workers,
                                 bench_parameters.collocate,
-                                rate_for_file,
+                                rate,
                                 bench_parameters.tx_size,
                             ))
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:

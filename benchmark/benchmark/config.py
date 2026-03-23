@@ -42,7 +42,7 @@ class Committee:
         }
     '''
 
-    def __init__(self, addresses, base_port):
+    def __init__(self, addresses, base_port, solid_step_length, solid_step_number, solid_reference):
         ''' The `addresses` field looks as follows:
             { 
                 "name": ["host", "host", ...],
@@ -61,7 +61,12 @@ class Committee:
         assert isinstance(base_port, int) and base_port > 1024
 
         port = base_port
-        self.json = {'authorities': OrderedDict()}
+        self.json = {
+            'authorities': OrderedDict(), 
+            'solid_step_length': solid_step_length,
+            'solid_step_number': solid_step_number,
+            'reference': solid_reference,
+        }
         for name, hosts in addresses.items():
             host = hosts.pop(0)
             primary_addr = {
@@ -125,10 +130,6 @@ class Committee:
                 ips.add(self.ip(worker['transactions']))
 
         return list(ips)
-    
-    def client_rate(self, name):
-        ''' Returns the client rate for an authority. '''
-        return self.json['authorities'][name]['client']['rate']
 
     def remove_nodes(self, nodes):
         ''' remove the `nodes` last nodes from the committee. '''
@@ -156,13 +157,13 @@ class Committee:
 
 
 class LocalCommittee(Committee):
-    def __init__(self, names, port, workers):
+    def __init__(self, names, port, workers, solid_step_length, solid_step_number, solid_reference):
         assert isinstance(names, list)
         assert all(isinstance(x, str) for x in names)
         assert isinstance(port, int)
         assert isinstance(workers, int) and workers > 0
         addresses = OrderedDict((x, ['127.0.0.1']*(1+workers)) for x in names)
-        super().__init__(addresses, port)
+        super().__init__(addresses, port, solid_step_length, solid_step_number, solid_reference)
 
 
 class NodeParameters:
@@ -201,22 +202,18 @@ class BenchParameters:
                 raise ConfigError('Missing or invalid number of nodes')
             self.nodes = [int(x) for x in nodes]
 
-            self.rate_type = json['rate_type']
-            if self.rate_type == 'imbalanced':
-                self.imbalanced_rate = json['imbalanced_rate']
-                self.imbalanced_rate = self.imbalanced_rate if isinstance(self.imbalanced_rate, list) else [self.imbalanced_rate]
-                if not self.imbalanced_rate:
-                    raise ConfigError('Missing imbalanced rate')
-                self.imbalanced_rate = [int(x) for x in self.imbalanced_rate]
-            elif self.rate_type == 'balanced':
-                rate = json['rate']
-                rate = rate if isinstance(rate, list) else [rate]
-                if not rate:
-                    raise ConfigError('Missing input rate')
-                self.rate = [int(x) for x in rate]
-            else:
-                raise ConfigError('Invalid rate type')
-            
+            rate = json['rate']
+            rate = rate if isinstance(rate, list) else [rate]
+            if not rate:
+                raise ConfigError('Missing input rate')
+            self.rate = [int(x) for x in rate]
+
+            self.rate_type = str(json['rate_type']) if 'rate_type' in json else 'balanced'
+
+            # Optional parameters for specific rate types
+            self.extreme_x = int(json['extreme_x']) if 'extreme_x' in json else None
+            self.percentages = json['percentages'] if 'percentages' in json else None
+
             self.workers = int(json['workers'])
 
             if 'collocate' in json:
@@ -237,9 +234,6 @@ class BenchParameters:
 
         if min(self.nodes) <= self.faults:
             raise ConfigError('There should be more nodes than faults')
-
-        if self.rate_type == 'imbalanced' and len(self.imbalanced_rate) != min(self.nodes) - self.faults:
-            raise ConfigError('Number of imbalanced rates must match number of nodes minus faults')
 
 
 class PlotParameters:

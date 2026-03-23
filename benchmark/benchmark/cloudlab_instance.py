@@ -29,10 +29,10 @@ class CloudLabInstanceManager:
     def hosts(self, flat=False):
         """
         Get list of hosts.
-        
+
         Args:
             flat: If True, return flat list. If False, return dict grouped by region.
-        
+
         Returns:
             List of hostnames or dict of {region: [hostnames]}
         """
@@ -49,7 +49,7 @@ class CloudLabInstanceManager:
     def get_host_info(self):
         """
         Get detailed host information including username and hostname.
-        
+
         Returns:
             List of dicts with 'hostname', 'username', and 'region'
         """
@@ -60,7 +60,7 @@ class CloudLabInstanceManager:
         hosts = self.hosts()
         key = self.settings.key_path
         host_info = self.get_host_info()
-        
+
         text = ''
         for region, hostnames in hosts.items():
             text += f'\n Region: {region.upper()}\n'
@@ -73,13 +73,13 @@ class CloudLabInstanceManager:
                         username = host.get('username', 'root')
                         port = host.get('port', 22)
                         break
-                
+
                 new_line = '\n' if (i+1) % 6 == 0 else ''
                 if port != 22:
                     text += f'{new_line} {i}\tssh -i {key} -p {port} {username}@{hostname}\n'
                 else:
                     text += f'{new_line} {i}\tssh -i {key} {username}@{hostname}\n'
-        
+
         print(
             '\n'
             '----------------------------------------------------------------\n'
@@ -89,4 +89,3 @@ class CloudLabInstanceManager:
             f'{text}'
             '----------------------------------------------------------------\n'
         )
-
