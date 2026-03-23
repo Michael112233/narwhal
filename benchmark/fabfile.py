@@ -3,10 +3,7 @@ from fabric import task
 
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
-from benchmark.utils import Print
-from benchmark.remote import Bench, BenchError
-from benchmark.cloudlab_instance import CloudLabInstanceManager
-from benchmark.cloudlab_remote import CloudLabBench
+from benchmark.utils import BenchError, Print
 
 # Import AWS instance module only when needed (lazy import - CloudLab doesn't need it)
 try:
@@ -22,6 +19,21 @@ except ImportError:
     PlotError = None
 
 
+def _get_aws_bench():
+    from benchmark.remote import Bench
+    return Bench
+
+
+def _get_cloudlab_instance_manager():
+    from benchmark.cloudlab_instance import CloudLabInstanceManager
+    return CloudLabInstanceManager
+
+
+def _get_cloudlab_bench():
+    from benchmark.cloudlab_remote import CloudLabBench
+    return CloudLabBench
+
+
 @task
 def local(ctx, debug=True):
     ''' Run benchmarks on localhost '''
@@ -29,19 +41,18 @@ def local(ctx, debug=True):
         'faults': 0,
         'nodes': 10,
         'workers': 1,
-        'rate_type': 'imbalanced',
-        # 'rate': 100000,
-        'imbalanced_rate': [20, 20, 20, 20, 20, 10000, 10000, 10000, 10000, 10000],
+        'rate_type': 'balanced',
+        'rate': 100000,
         'tx_size': 512,
         'duration': 90,
         'trigger_attack': True
     }
     node_params = {
         'header_size': 1_000,  # bytes
-        'max_header_delay': 200,  # ms
+        'max_header_delay': 100,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 10_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200  # ms
     }
@@ -116,7 +127,7 @@ def info(ctx):
 def install(ctx):
     ''' Install the codebase on all machines '''
     try:
-        Bench(ctx).install()
+        _get_aws_bench()(ctx).install()
     except BenchError as e:
         Print.error(e)
 
@@ -145,7 +156,7 @@ def remote(ctx, debug=False):
         'max_batch_delay': 200  # ms
     }
     try:
-        Bench(ctx).run(bench_params, node_params, debug)
+        _get_aws_bench()(ctx).run(bench_params, node_params, debug)
     except BenchError as e:
         Print.error(e)
 
@@ -174,7 +185,7 @@ def plot(ctx):
 def kill(ctx):
     ''' Stop execution on all machines (AWS) '''
     try:
-        Bench(ctx).kill()
+        _get_aws_bench()(ctx).kill()
     except BenchError as e:
         Print.error(e)
 
@@ -193,7 +204,7 @@ def logs(ctx):
 def cloudlab_info(ctx):
     ''' Display connect information about all CloudLab nodes '''
     try:
-        CloudLabInstanceManager.make().print_info()
+        _get_cloudlab_instance_manager().make().print_info()
     except BenchError as e:
         Print.error(e)
 
@@ -202,7 +213,7 @@ def cloudlab_info(ctx):
 def cloudlab_test(ctx):
     ''' Test SSH connections to all CloudLab nodes '''
     try:
-        CloudLabBench(ctx).test_connections()
+        _get_cloudlab_bench()(ctx).test_connections()
     except BenchError as e:
         Print.error(e)
 
@@ -211,7 +222,7 @@ def cloudlab_test(ctx):
 def cloudlab_install(ctx):
     ''' Install the codebase on all CloudLab nodes '''
     try:
-        CloudLabBench(ctx).install()
+        _get_cloudlab_bench()(ctx).install()
     except BenchError as e:
         Print.error(e)
 
@@ -241,7 +252,7 @@ def cloudlab_remote(ctx, debug=True):
         'max_batch_delay': 200  # ms
     }
     try:
-        CloudLabBench(ctx).run(bench_params, node_params, debug)
+        _get_cloudlab_bench()(ctx).run(bench_params, node_params, debug)
     except BenchError as e:
         Print.error(e)
 
@@ -250,7 +261,7 @@ def cloudlab_remote(ctx, debug=True):
 def cloudlab_status(ctx):
     ''' Check if benchmark processes are running on CloudLab nodes '''
     try:
-        CloudLabBench(ctx).status()
+        _get_cloudlab_bench()(ctx).status()
     except BenchError as e:
         Print.error(e)
 
@@ -258,7 +269,7 @@ def cloudlab_status(ctx):
 def cloudlab_debug(ctx):
     ''' Debug: Check tmux sessions and capture error messages from CloudLab nodes '''
     try:
-        CloudLabBench(ctx).debug_sessions()
+        _get_cloudlab_bench()(ctx).debug_sessions()
     except BenchError as e:
         Print.error(e)
 
@@ -267,7 +278,7 @@ def cloudlab_debug(ctx):
 def cloudlab_kill(ctx):
     ''' Stop execution on all CloudLab nodes '''
     try:
-        CloudLabBench(ctx).kill()
+        _get_cloudlab_bench()(ctx).kill()
     except BenchError as e:
         Print.error(e)
 

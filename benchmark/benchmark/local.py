@@ -20,9 +20,9 @@ class LocalBench:
             self.node_parameters = NodeParameters(node_parameters_dict)
             if bench_parameters_dict['rate_type'] == 'imbalanced':
                 self.s = node_parameters_dict['s']
-            self.solid_step_length = node_parameters_dict['solid_step_length']
-            self.solid_step_number = node_parameters_dict['solid_step_number']
-            self.solid_reference = node_parameters_dict['reference']
+            self.solid_step_length = node_parameters_dict.get('solid_step_length', 2)
+            self.solid_step_number = node_parameters_dict.get('solid_step_number', 1)
+            self.solid_reference = node_parameters_dict.get('reference', 3)
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
 

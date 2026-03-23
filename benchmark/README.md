@@ -5,7 +5,14 @@ This document explains how to benchmark the codebase and read benchmarks' result
 When running benchmarks, the codebase is automatically compiled with the feature flag `benchmark`. This enables the node to print some special log entries that are then read by the python scripts and used to compute performance. These special log entries are clearly indicated with comments in the code: make sure to not alter them (otherwise the benchmark scripts will fail to interpret the logs).
 
 ### Parametrize the benchmark
-After cloning the repo and [installing all dependencies](https://github.com/asonnino/narwhal#quick-start), you can use [Fabric](http://www.fabfile.org/) to run benchmarks on your local machine.  Locate the task called `local` in the file [fabfile.py](https://github.com/asonnino/narwhal/blob/master/benchmark/fabfile.py):
+After cloning the repo and [installing all dependencies](https://github.com/asonnino/narwhal#quick-start), you can use [Fabric](http://www.fabfile.org/) to run benchmarks on your local machine. On modern Ubuntu releases, install the benchmark dependencies inside `benchmark/.venv` rather than the system Python:
+```
+$ cd narwhal/benchmark
+$ python3 -m venv .venv
+$ source .venv/bin/activate
+$ pip install -r requirements.txt
+```
+Locate the task called `local` in the file [fabfile.py](https://github.com/asonnino/narwhal/blob/master/benchmark/fabfile.py):
 ```python
 @task
 def local(ctx):

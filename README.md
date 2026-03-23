@@ -12,6 +12,8 @@ To deploy and benchmark a testbed of 4 nodes on your local machine, clone the re
 ```
 $ git clone https://github.com/asonnino/narwhal.git
 $ cd narwhal/benchmark
+$ python3 -m venv .venv
+$ source .venv/bin/activate
 $ pip install -r requirements.txt
 ```
 You also need to install Clang (required by rocksdb) and [tmux](https://linuxize.com/post/getting-started-with-tmux/#installing-tmux) (which runs all nodes and clients in the background). Finally, run a local benchmark using fabric:

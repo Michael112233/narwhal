@@ -188,7 +188,7 @@ class CloudLabBench:
             'sudo apt-get install -y libclang-dev',
             'sudo apt-get update',
             'sudo apt-get install -y iproute2',
-            'sudo apt-get install -y python3-pip',
+            'sudo apt-get install -y python3-pip python3-venv',
             # Keep baseline build deps for benchmark compilation.
             'sudo apt-get install -y build-essential cmake clang',
             'source $HOME/.cargo/env',
@@ -201,7 +201,9 @@ class CloudLabBench:
             'echo "export PATH=\\$HOME/.cargo/bin:\\$PATH" >> $HOME/.bashrc',
             'echo "export PATH=\\$HOME/.cargo/bin:\\$PATH" >> $HOME/.profile',
             f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))',
-            f'cd {self.settings.repo_name}/benchmark && pip3 install -r requirements.txt'
+            f'cd {self.settings.repo_name}/benchmark && python3 -m venv .venv',
+            f'cd {self.settings.repo_name}/benchmark && .venv/bin/pip install --upgrade pip',
+            f'cd {self.settings.repo_name}/benchmark && .venv/bin/pip install -r requirements.txt'
         ]
         
         try:
@@ -1691,4 +1693,3 @@ SCRIPTEOF'''
                             continue
         
         Print.heading('All benchmarks completed')
-
