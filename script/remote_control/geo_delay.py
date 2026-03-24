@@ -16,7 +16,11 @@
   或使用仓库里的 simulate_geo_netem.py 对多台批量执行同一命令。
 
 拓扑与默认延迟写在本文件常量里；仅当需要覆盖时才设置环境变量：
-  NETIF、MYIP、EU_NODES_STR、AM_NODES_STR、AS_NODES_STR、DELAY_EU_TO_AM 等。
+  NETIF（强制网卡）、GEO_NETEM_ROUTE_PROBE（选网卡时 ip route get 的目标，默认 10.10.1.1）、
+  MYIP、EU_NODES_STR、AM_NODES_STR、AS_NODES_STR、DELAY_* 等。
+
+多网卡机器上「默认路由」网卡可能与发往 10.10.1.x 的网卡不同；本脚本优先按实验网路由选 dev，
+避免把 netem 挂在错误接口上（例如规则在 eno1 而流量走 enp5s0f0）。
 
 依赖：Python3、iproute2、无密码 sudo（或 root）。
 """
@@ -77,10 +81,31 @@ def detect_myip() -> str:
     sys.exit(1)
 
 
+def _dev_from_route_get(dst: str) -> str | None:
+    r = subprocess.run(
+        ["ip", "-4", "route", "get", dst],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0 or not r.stdout:
+        return None
+    parts = r.stdout.split()
+    for i, p in enumerate(parts):
+        if p == "dev" and i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+
+
 def detect_iface() -> str:
     netif = os.environ.get("NETIF", "").strip()
     if netif:
         return netif
+    # 先发往实验网一跳：与 ping 10.10.1.x 走同一出口，避免误用「默认路由」网卡
+    probe = os.environ.get("GEO_NETEM_ROUTE_PROBE", "10.10.1.1").strip() or "10.10.1.1"
+    dev = _dev_from_route_get(probe)
+    if dev:
+        return dev
     r = subprocess.run(
         ["ip", "-4", "route", "show", "default"],
         capture_output=True,
@@ -91,17 +116,6 @@ def detect_iface() -> str:
         parts = r.stdout.split()
         if len(parts) >= 5:
             return parts[4]
-    r2 = subprocess.run(
-        ["ip", "-4", "route", "get", "10.10.1.1"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if r2.returncode == 0 and r2.stdout:
-        parts = r2.stdout.split()
-        for i, p in enumerate(parts):
-            if p == "dev" and i + 1 < len(parts):
-                return parts[i + 1]
     return "eth0"
 
 
