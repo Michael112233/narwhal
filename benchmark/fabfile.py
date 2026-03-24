@@ -226,7 +226,7 @@ def cloudlab_install(ctx):
     except BenchError as e:
         Print.error(e)
 
-
+# coupled experiment
 @task
 def cloudlab_remote(ctx, debug=True):
     ''' Run benchmarks on CloudLab '''
