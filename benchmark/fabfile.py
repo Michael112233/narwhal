@@ -235,20 +235,20 @@ def cloudlab_remote(ctx, debug=True):
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        'rate_type': 'imbalanced',
-        'imbalanced_rate': [20, 20, 20, 20, 500, 500, 500, 50000, 50000, 50000],
+        'rate_type': 'balanced',
+        'rate': [100000],
         'tx_size': 512,
-        'duration': 60,
-        'runs': 1,
+        'duration': 120,
+        'runs': 2,
         # 'trigger_attack': [True], 
     }
     node_params = {
-        'header_size': 1_000,  # bytes
-        'max_header_delay': 200,  # ms
+        'header_size': 1000,  # bytes
+        'max_header_delay': 100,  # ms
         'gc_depth': 50,  # rounds
-        'sync_retry_delay': 10_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
-        'batch_size': 500_000,  # bytes
+        'sync_retry_delay': 1000,  # ms
+        'sync_retry_nodes': 7,  # number of nodes
+        'batch_size': 500000,  # bytes
         'max_batch_delay': 200  # ms
     }
     try:
