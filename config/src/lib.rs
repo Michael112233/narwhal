@@ -139,11 +139,15 @@ pub struct Authority {
 
 #[derive(Clone, Deserialize)]
 pub struct Committee {
-    /// TODO: Reference parameter for the solid step.
     pub authorities: BTreeMap<PublicKey, Authority>,
-    pub solid_step_length: usize,
-    pub solid_step_number: usize,
+    /// The length of the solid step [r, r+sigma]
+    pub sigma: usize,
+    /// The number of solid steps in a wave
+    pub kappa: usize,
+    /// The reference parameter for the solid step.
     pub reference: usize,
+    /// The coverage parameter for the solid step.
+    pub coverage: usize,
 }
 
 impl Import for Committee {}
@@ -173,18 +177,19 @@ impl Committee {
         // If N = 3f + 1 + k (0 <= k < 3)
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        // 2 * total_votes / 3 + 1
-        (total_votes + 2) / 3
+        2 * total_votes / 3 + 1
+        // (total_votes + 2) / 3
     }
 
     pub fn processing_threshold(&self, current_round: u64) -> Stake {
         // Apart from the quorum threshold, this is specially for processing headers.
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        if current_round % self.solid_step_length() as u64 == 0 && current_round > 1 {
-            return self.reference as Stake;
+        if self.is_solid_step(current_round) {
+            return self.coverage as Stake;
             // return (total_votes + 2) / 3;
         } else {
-            return (total_votes + 2) / 3;
+            //
+            return self.reference as Stake;
         }
     }
 
@@ -197,8 +202,7 @@ impl Committee {
     }
 
     pub fn max_threshold(&self) -> Stake {
-        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        2 * total_votes / 3 + 1
+        self.coverage as Stake
     }
 
     /// Returns the primary addresses of the target primary.
@@ -268,17 +272,17 @@ impl Committee {
 
     /// Returns the number of the solid wave.
     pub fn solid_wave_length(&self) -> u64 {
-        self.solid_step_length as u64 * self.solid_step_number as u64
+        (self.sigma) as u64 * (self.kappa as u64)
     }
 
     /// Returns the length of the solid step.
     pub fn solid_step_length(&self) -> u64 {
-        self.solid_step_length as u64
+        (self.sigma) as u64
     }
 
-    /// Returns the number of the solid step.
-    pub fn solid_step_number(&self) -> u64 {
-        self.solid_step_number as u64
+    /// Returns whether the provided round is the first round of a solid step.
+    pub fn is_solid_step(&self, round: u64) -> bool {
+        round > 1 && round % self.solid_step_length() == 0
     }
 }
 

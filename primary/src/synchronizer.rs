@@ -5,9 +5,9 @@ use crate::messages::{Certificate, Header};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
+use log::debug;
 use std::collections::HashMap;
 use store::Store;
-use log::debug;
 use tokio::sync::mpsc::Sender;
 
 /// The `Synchronizer` checks if we have all batches and parents referenced by a header. If we don't, it sends
@@ -125,7 +125,11 @@ impl Synchronizer {
                         .iter()
                         .position(|a| a == &cert.origin())
                         .unwrap_or(999);
-                    let weak_prefix = if cert.round() + 1 < header.round { "w" } else { "" };
+                    let weak_prefix = if cert.round() + 1 < header.round {
+                        "w"
+                    } else {
+                        ""
+                    };
                     missing_labels.push(format!(
                         "{} [{}{},{}]",
                         digest,

@@ -20,6 +20,14 @@ pub struct Header {
     pub signature: Signature,
     /// Stores the vertices of the first round of the solid step which can be linked to
     pub solid_step_vertices: HashSet<Digest>,
+    /// Stores the merged solid-step vertices computed from parents at header creation time.
+    /// This preserves the union even when `solid_step_vertices` is re-initialized on init rounds.
+    pub solid_step_vertices_merged: HashSet<Digest>,
+    /// Stores the vertices of the current solid wave that can be linked to this header.
+    pub solid_wave_vertices: HashSet<Digest>,
+    /// Stores the merged solid-wave vertices computed from parents at header creation time.
+    /// This preserves the union even when `solid_wave_vertices` is re-initialized on wave-end rounds.
+    pub solid_wave_vertices_merged: HashSet<Digest>,
 }
 
 impl Header {
@@ -38,6 +46,9 @@ impl Header {
             id: Digest::default(),
             signature: Signature::default(),
             solid_step_vertices: HashSet::new(),
+            solid_step_vertices_merged: HashSet::new(),
+            solid_wave_vertices: HashSet::new(),
+            solid_wave_vertices_merged: HashSet::new(),
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -71,6 +82,35 @@ impl Header {
 
     pub fn store_solid_step_vertex(&mut self, vertices: HashSet<Digest>) {
         self.solid_step_vertices.extend(vertices);
+    }
+
+    pub fn store_solid_step_merged_vertices(&mut self, vertices: HashSet<Digest>) {
+        self.solid_step_vertices_merged.extend(vertices);
+    }
+
+    pub fn store_solid_wave_vertex(&mut self, vertices: HashSet<Digest>) {
+        self.solid_wave_vertices.extend(vertices);
+    }
+
+    pub fn store_solid_wave_merged_vertices(&mut self, vertices: HashSet<Digest>) {
+        self.solid_wave_vertices_merged.extend(vertices);
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProposalParents {
+    pub parents: Vec<Digest>,
+    pub solid_step_union: HashSet<Digest>,
+    pub solid_wave_union: HashSet<Digest>,
+}
+
+impl From<Vec<Digest>> for ProposalParents {
+    fn from(parents: Vec<Digest>) -> Self {
+        Self {
+            parents,
+            solid_step_union: HashSet::new(),
+            solid_wave_union: HashSet::new(),
+        }
     }
 }
 

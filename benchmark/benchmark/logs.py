@@ -14,7 +14,8 @@ class ParseError(Exception):
 
 
 class LogParser:
-    def __init__(self, clients, primaries, workers, faults=0):
+    def __init__(self, clients, primaries, workers, faults=0,
+                 default_client_size=None, default_client_rates=None):
         inputs = [clients, primaries, workers]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
@@ -33,7 +34,23 @@ class LogParser:
             with Pool() as p:
                 results = p.map(self._parse_clients, clients)
         except (ValueError, IndexError, AttributeError) as e:
-            raise ParseError(f'Failed to parse clients\' logs: {e}')
+            if default_client_size is None or default_client_rates is None:
+                raise ParseError(f'Failed to parse clients\' logs: {e}')
+
+            rates = default_client_rates
+            if not isinstance(rates, list):
+                rates = [rates] * len(clients)
+            if len(rates) != len(clients):
+                raise ParseError('Failed to parse clients\' logs: mismatched fallback rates')
+
+            Print.warn(
+                'Client logs are missing the expected metadata; '
+                'falling back to configured transaction size/rate values'
+            )
+            results = [
+                (default_client_size, rates[i], None, 0, {})
+                for i in range(len(clients))
+            ]
         self.size, self.rate, self.start, misses, self.sent_samples \
             = zip(*results)
         self.misses = sum(misses)
@@ -169,7 +186,9 @@ class LogParser:
     def _end_to_end_throughput(self):
         if not self.commits:
             return 0, 0, 0
-        start, end = min(self.start), max(self.commits.values())
+        start_candidates = [x for x in self.start if x is not None]
+        start = min(start_candidates) if start_candidates else min(self.proposals.values())
+        end = max(self.commits.values())
         duration = end - start
         bytes = sum(self.sizes.values())
         bps = bytes / duration
@@ -240,7 +259,8 @@ class LogParser:
             f.write(self.result())
 
     @classmethod
-    def process(cls, directory, faults=0):
+    def process(cls, directory, faults=0, default_client_size=None,
+                default_client_rates=None):
         assert isinstance(directory, str)
 
         clients = []
@@ -256,4 +276,11 @@ class LogParser:
             with open(filename, 'r') as f:
                 workers += [f.read()]
 
-        return cls(clients, primaries, workers, faults=faults)
+        return cls(
+            clients,
+            primaries,
+            workers,
+            faults=faults,
+            default_client_size=default_client_size,
+            default_client_rates=default_client_rates,
+        )

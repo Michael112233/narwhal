@@ -1,9 +1,12 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 import subprocess
+from contextlib import suppress
 from math import ceil
 from os.path import basename, splitext
+from shutil import which
 from time import sleep
 
+from benchmark.imbalanced_rate import ZipfAllocator
 from benchmark.commands import CommandMaker
 from benchmark.config import Key, LocalCommittee, NodeParameters, BenchParameters, ConfigError
 from benchmark.logs import LogParser, ParseError
@@ -14,12 +17,16 @@ class LocalBench:
     BASE_PORT = 3000
 
     def __init__(self, bench_parameters_dict, node_parameters_dict):
+        self._processes = []
         try:
             self.bench_parameters = BenchParameters(bench_parameters_dict)
             self.node_parameters = NodeParameters(node_parameters_dict)
-            self.solid_step_length = node_parameters_dict['solid_step_length']
-            self.solid_step_number = node_parameters_dict['solid_step_number']
-            self.solid_reference = node_parameters_dict['reference']
+            if bench_parameters_dict['rate_type'] == 'imbalanced':
+                self.s = node_parameters_dict['s']
+            self.sigma = node_parameters_dict['sigma']
+            self.kappa = node_parameters_dict['kappa']
+            self.reference = node_parameters_dict['reference']
+            self.coverage = node_parameters_dict['coverage']
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
 
@@ -28,13 +35,36 @@ class LocalBench:
 
     def _background_run(self, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f'{command} 2> {log_file}'
-        subprocess.run(['tmux', 'new', '-d', '-s', name, cmd], check=True)
+        cmd = f'{command} > {log_file} 2>&1'
+        if which('tmux'):
+            try:
+                subprocess.run(['tmux', 'new', '-d', '-s', name, cmd], check=True)
+                return
+            except subprocess.SubprocessError:
+                pass
+
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            executable='/bin/bash',
+            start_new_session=True,
+        )
+        self._processes.append(process)
 
     def _kill_nodes(self):
         try:
-            cmd = CommandMaker.kill().split()
-            subprocess.run(cmd, stderr=subprocess.DEVNULL)
+            if self._processes:
+                for process in self._processes:
+                    with suppress(ProcessLookupError):
+                        process.terminate()
+                for process in self._processes:
+                    with suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=5)
+                self._processes = []
+
+            if which('tmux'):
+                cmd = CommandMaker.kill().split()
+                subprocess.run(cmd, stderr=subprocess.DEVNULL)
         except subprocess.SubprocessError as e:
             raise BenchError('Failed to kill testbed', e)
 
@@ -47,7 +77,7 @@ class LocalBench:
 
         try:
             Print.info('Setting up testbed...')
-            nodes, rate = self.nodes[0], self.rate[0]
+            nodes, rate, rate_type = self.nodes[0], self.rate[0], self.rate_type
 
             # Cleanup all files.
             cmd = f'{CommandMaker.clean_logs()} ; {CommandMaker.cleanup()}'
@@ -71,24 +101,44 @@ class LocalBench:
                 keys += [Key.from_file(filename)]
 
             names = [x.name for x in keys]
-            committee = LocalCommittee(names, self.BASE_PORT, self.workers, self.solid_step_length, self.solid_step_number, self.solid_reference)
+            committee = LocalCommittee(names, self.BASE_PORT, self.workers, self.sigma, self.kappa, self.reference, self.coverage)
             committee.print(PathMaker.committee_file())
 
             self.node_parameters.print(PathMaker.parameters_file())
 
             # Run the clients (they will wait for the nodes to be ready).
             workers_addresses = committee.workers_addresses(self.faults)
-            rate_share = ceil(rate / committee.workers())
-            for i, addresses in enumerate(workers_addresses):
-                for (id, address) in addresses:
-                    cmd = CommandMaker.run_client(
-                        address,
-                        self.tx_size,
-                        rate_share,
-                        [x for y in workers_addresses for _, x in y]
-                    )
-                    log_file = PathMaker.client_log_file(i, id)
-                    self._background_run(cmd, log_file)
+            client_rates = []
+            if rate_type == 'balanced':
+                rate_share = ceil(rate / committee.workers())
+                for i, addresses in enumerate(workers_addresses):
+                    for (id, address) in addresses:
+                        client_rates.append(rate_share)
+                        cmd = CommandMaker.run_client(
+                            address,
+                            self.tx_size,
+                            rate_share,
+                            [x for y in workers_addresses for _, x in y]
+                        )
+                        log_file = PathMaker.client_log_file(i, id)
+                        self._background_run(cmd, log_file)
+            else:
+                # generate a list of rate with zipf
+                zipf_allocator = ZipfAllocator(rate, committee.workers(), self.s)
+                rates = zipf_allocator.allocate()
+                print(rates)
+                # run the clients with the generated rate
+                for i, addresses in enumerate(workers_addresses):
+                    for (id, address) in addresses:
+                        client_rates.append(rates[i])
+                        cmd = CommandMaker.run_client(
+                            address,
+                            self.tx_size,
+                            rates[i],
+                            [x for y in workers_addresses for _, x in y]
+                        )
+                        log_file = PathMaker.client_log_file(i, id)
+                        self._background_run(cmd, log_file)
 
             # Run the primaries (except the faulty ones).
             for i, address in enumerate(committee.primary_addresses(self.faults)):
@@ -123,7 +173,12 @@ class LocalBench:
 
             # Parse logs and return the parser.
             Print.info('Parsing logs...')
-            return LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            return LogParser.process(
+                PathMaker.logs_path(),
+                faults=self.faults,
+                default_client_size=self.tx_size,
+                default_client_rates=client_rates,
+            )
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()
