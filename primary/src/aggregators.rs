@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote};
+use crate::messages::{Certificate, Header, ProposalParents, Vote};
 use crate::primary::Round;
 use config::{Committee, Stake};
 use crypto::Hash as _;
@@ -67,13 +67,13 @@ pub struct CertificatesAggregator {
     /// Wait for several seconds after meeting the condition
     quorum_reached_time: Option<Instant>,
     wait_duration: Duration,
-    /// Incremental union of valid parents' solid_step_vertices_merged on solid rounds.
-    union_vertices: HashSet<Digest>,
+    /// Incremental union of parents' solid-step summaries for the proposal round.
+    solid_step_union: HashSet<Digest>,
+    /// Incremental union of parents' solid-wave summaries for the proposal round.
+    solid_wave_union: HashSet<Digest>,
     /// Last computed union of parents' solid_step_vertices_merged on solid rounds
     /// (for debug / final_dag display).
     last_union_set: Option<Vec<Digest>>,
-    /// Whether this round's parents have already been emitted once to the proposer.
-    sent_to_proposer: bool,
 }
 
 impl CertificatesAggregator {
@@ -87,9 +87,9 @@ impl CertificatesAggregator {
             has_quorum: false,
             quorum_reached_time: None,
             wait_duration: Duration::from_millis(20),
-            union_vertices: HashSet::new(),
+            solid_step_union: HashSet::new(),
+            solid_wave_union: HashSet::new(),
             last_union_set: None,
-            sent_to_proposer: false,
         }
     }
 
@@ -100,11 +100,31 @@ impl CertificatesAggregator {
         self.last_union_set.as_deref()
     }
 
+    fn extend_step_union(&mut self, certificate: &Certificate) {
+        if certificate.header.solid_step_vertices_merged.is_empty() {
+            self.solid_step_union
+                .extend(certificate.header.solid_step_vertices.iter().cloned());
+        } else {
+            self.solid_step_union
+                .extend(certificate.header.solid_step_vertices_merged.iter().cloned());
+        }
+    }
+
+    fn extend_wave_union(&mut self, certificate: &Certificate) {
+        if certificate.header.solid_wave_vertices_merged.is_empty() {
+            self.solid_wave_union
+                .extend(certificate.header.solid_wave_vertices.iter().cloned());
+        } else {
+            self.solid_wave_union
+                .extend(certificate.header.solid_wave_vertices_merged.iter().cloned());
+        }
+    }
+
     pub fn append(
         &mut self,
         certificate: Certificate,
         committee: &Committee,
-    ) -> DagResult<Option<Vec<Digest>>> {
+    ) -> DagResult<Option<ProposalParents>> {
         let origin = certificate.origin();
 
         // Ensure it is the first time this authority votes as a strong edge.
@@ -125,35 +145,22 @@ impl CertificatesAggregator {
         // Add the certificate to the appropriate list.
         if certificate.round() == self.expected_round {
             self.certificates.push(certificate.digest());
-            if committee.is_solid_step(current_round) {
-                self.union_vertices.extend(
-                    certificate
-                        .header
-                        .solid_step_vertices_merged
-                        .iter()
-                        .cloned(),
-                );
-            }
+            self.extend_step_union(&certificate);
+            self.extend_wave_union(&certificate);
             self.weight += committee.stake(&origin);
         } else if certificate.round() >= regular_weak_start
             && certificate.round() < self.expected_round
         {
             self.certificates.push(certificate.digest());
             self.weak_certificates.push(certificate.digest());
-            if committee.is_solid_step(current_round) {
-                self.union_vertices.extend(
-                    certificate
-                        .header
-                        .solid_step_vertices_merged
-                        .iter()
-                        .cloned(),
-                );
-            }
+            self.extend_step_union(&certificate);
+            self.extend_wave_union(&certificate);
         } else if certificate.round() >= commit_weak_start
             && certificate.round() < regular_weak_start
         {
             self.certificates.push(certificate.digest());
             self.weak_certificates.push(certificate.digest());
+            self.extend_wave_union(&certificate);
         } else {
             return Ok(None);
         }
@@ -173,13 +180,14 @@ impl CertificatesAggregator {
             current_round, threshold, is_solid_step
         );
         if is_solid_step {
-            self.last_union_set = Some(self.union_vertices.iter().cloned().collect());
+            self.last_union_set = Some(self.solid_step_union.iter().cloned().collect());
             self.has_quorum =
-                self.union_vertices.len() >= committee.processing_threshold(current_round) as usize;
+                self.solid_step_union.len()
+                    >= committee.processing_threshold(current_round) as usize;
             debug!(
                 "Current round: {}, The number of merged solid-step vertices is {}",
                 current_round,
-                self.union_vertices.len()
+                self.solid_step_union.len()
             );
         } else {
             self.has_quorum = self.weight >= committee.processing_threshold(current_round);
@@ -203,14 +211,11 @@ impl CertificatesAggregator {
             if self.quorum_reached_time.is_none() {
                 self.quorum_reached_time = Some(Instant::now());
             }
-            if self.sent_to_proposer {
-                return Ok(None);
-            }
-            self.sent_to_proposer = true;
-            let mut all = Vec::with_capacity(self.certificates.len());
-            all.extend(self.certificates.iter().cloned());
+            let mut proposal_parents = ProposalParents::from(self.certificates.clone());
+            proposal_parents.solid_step_union = self.solid_step_union.clone();
+            proposal_parents.solid_wave_union = self.solid_wave_union.clone();
             // if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
-            return Ok(Some(all));
+            return Ok(Some(proposal_parents));
             // }
         }
         Ok(None)

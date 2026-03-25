@@ -1,7 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote};
+use crate::messages::{Certificate, Header, ProposalParents, Vote};
 use crate::primary::{PrimaryMessage, Round};
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
@@ -47,8 +47,8 @@ pub struct Core {
     rx_proposer: Receiver<Header>,
     /// Output all certificates to the consensus layer.
     tx_consensus: Sender<Certificate>,
-    /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
-    tx_proposer: Sender<(Vec<Digest>, Round)>,
+    /// Send valid parent snapshots to the `Proposer` (along with their round).
+    tx_proposer: Sender<(ProposalParents, Round)>,
 
     /// The last garbage collected round.
     gc_round: Round,
@@ -90,7 +90,7 @@ impl Core {
         rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
-        tx_proposer: Sender<(Vec<Digest>, Round)>,
+        tx_proposer: Sender<(ProposalParents, Round)>,
     ) {
         tokio::spawn(async move {
             Self {
