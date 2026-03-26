@@ -45,7 +45,7 @@ def local(ctx, debug=True):
         'rate': 100000,
         'tx_size': 512,
         'duration': 90,
-        'trigger_attack': True
+        # 'trigger_attack': True
     }
     node_params = {
         'header_size': 1_000,  # bytes
