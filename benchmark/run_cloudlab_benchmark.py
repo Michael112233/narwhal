@@ -99,7 +99,7 @@ def process_logs(faults=0, save_to_file=True):
             results_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            result_file = results_dir / f'benchmark_result_zipf_geo_{timestamp}.txt'
+            result_file = results_dir / f'benchmark_result_zipf_geo_uniform_{timestamp}.txt'
             
             with open(result_file, 'w') as f:
                 f.write(f'Benchmark Results - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n')
