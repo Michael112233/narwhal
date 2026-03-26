@@ -16,7 +16,7 @@ pub mod processor_tests;
 /// Indicates a serialized `WorkerMessage::Batch` message.
 pub type SerializedBatchMessage = Vec<u8>;
 
-/// Hashes and stores batches, it then outputs the batch's digest.
+/// Hashes and stores batches, then forwards both digest and serialized payload.
 pub struct Processor;
 
 impl Processor {
@@ -36,14 +36,15 @@ impl Processor {
             while let Some(batch) = rx_batch.recv().await {
                 // Hash the batch.
                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
+                let serialized_batch = batch.clone();
 
                 // Store the batch.
                 store.write(digest.to_vec(), batch).await;
 
-                // Deliver the batch's digest.
+                // Deliver the batch's digest together with the serialized payload.
                 let message = match own_digest {
-                    true => WorkerPrimaryMessage::OurBatch(digest, id),
-                    false => WorkerPrimaryMessage::OthersBatch(digest, id),
+                    true => WorkerPrimaryMessage::OurBatch(digest, id, serialized_batch.clone()),
+                    false => WorkerPrimaryMessage::OthersBatch(digest, id, serialized_batch),
                 };
                 let message = bincode::serialize(&message)
                     .expect("Failed to serialize our own worker-primary message");

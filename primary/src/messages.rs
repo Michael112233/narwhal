@@ -15,6 +15,7 @@ pub struct Header {
     pub author: PublicKey,
     pub round: Round,
     pub payload: BTreeMap<Digest, WorkerId>,
+    pub inline_payload: Option<BTreeMap<Digest, Vec<u8>>>,
     pub parents: BTreeSet<Digest>,
     pub id: Digest,
     pub signature: Signature,
@@ -25,6 +26,7 @@ impl Header {
         author: PublicKey,
         round: Round,
         payload: BTreeMap<Digest, WorkerId>,
+        inline_payload: Option<BTreeMap<Digest, Vec<u8>>>,
         parents: BTreeSet<Digest>,
         signature_service: &mut SignatureService,
     ) -> Self {
@@ -32,6 +34,7 @@ impl Header {
             author,
             round,
             payload,
+            inline_payload,
             parents,
             id: Digest::default(),
             signature: Signature::default(),
@@ -60,6 +63,22 @@ impl Header {
                 .map_err(|_| DagError::MalformedHeader(self.id.clone()))?;
         }
 
+        // Ensure the inlined payload matches the referenced digests.
+        if let Some(inline_payload) = &self.inline_payload {
+            for (digest, bytes) in inline_payload {
+                ensure!(
+                    self.payload.contains_key(digest),
+                    DagError::MalformedHeader(self.id.clone())
+                );
+                let computed = Digest(
+                    Sha512::digest(bytes).as_slice()[..32]
+                        .try_into()
+                        .unwrap(),
+                );
+                ensure!(computed == *digest, DagError::MalformedHeader(self.id.clone()));
+            }
+        }
+
         // Check the signature.
         self.signature
             .verify(&self.id, &self.author)
@@ -75,6 +94,13 @@ impl Hash for Header {
         for (x, y) in &self.payload {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
+        }
+        if let Some(inline_payload) = &self.inline_payload {
+            for (digest, bytes) in inline_payload {
+                hasher.update(digest);
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes);
+            }
         }
         for x in &self.parents {
             hasher.update(x);

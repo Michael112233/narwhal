@@ -9,6 +9,10 @@ use std::collections::HashMap;
 use store::Store;
 use tokio::sync::mpsc::Sender;
 
+#[cfg(test)]
+#[path = "tests/synchronizer_tests.rs"]
+pub mod synchronizer_tests;
+
 /// The `Synchronizer` checks if we have all batches and parents referenced by a header. If we don't, it sends
 /// a command to the `Waiter` to request the missing data.
 pub struct Synchronizer {
@@ -55,6 +59,15 @@ impl Synchronizer {
 
         let mut missing = HashMap::new();
         for (digest, worker_id) in header.payload.iter() {
+            if header
+                .inline_payload
+                .as_ref()
+                .and_then(|payload| payload.get(digest))
+                .is_some()
+            {
+                continue;
+            }
+
             // Check whether we have the batch. If one of our worker has the batch, the primary stores the pair
             // (digest, worker_id) in its own storage. It is important to verify that we received the batch
             // from the correct worker id to prevent the following attack:

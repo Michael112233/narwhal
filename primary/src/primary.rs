@@ -50,9 +50,9 @@ pub enum PrimaryWorkerMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerPrimaryMessage {
     /// The worker indicates it sealed a new batch.
-    OurBatch(Digest, WorkerId),
+    OurBatch(Digest, WorkerId, Vec<u8>),
     /// The worker indicates it received a batch's digest from another authority.
-    OthersBatch(Digest, WorkerId),
+    OthersBatch(Digest, WorkerId, Vec<u8>),
 }
 
 pub struct Primary;
@@ -191,6 +191,7 @@ impl Primary {
             &committee,
             signature_service,
             parameters.header_size,
+            parameters.max_header_batches,
             parameters.max_header_delay,
             /* rx_core */ rx_parents,
             /* rx_workers */ rx_our_digests,
@@ -246,7 +247,7 @@ impl MessageHandler for PrimaryReceiverHandler {
 /// Defines how the network receiver handles incoming workers messages.
 #[derive(Clone)]
 struct WorkerReceiverHandler {
-    tx_our_digests: Sender<(Digest, WorkerId)>,
+    tx_our_digests: Sender<(Digest, WorkerId, Vec<u8>)>,
     tx_others_digests: Sender<(Digest, WorkerId)>,
 }
 
@@ -259,12 +260,12 @@ impl MessageHandler for WorkerReceiverHandler {
     ) -> Result<(), Box<dyn Error>> {
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
-            WorkerPrimaryMessage::OurBatch(digest, worker_id) => self
+            WorkerPrimaryMessage::OurBatch(digest, worker_id, batch) => self
                 .tx_our_digests
-                .send((digest, worker_id))
+                .send((digest, worker_id, batch))
                 .await
                 .expect("Failed to send workers' digests"),
-            WorkerPrimaryMessage::OthersBatch(digest, worker_id) => self
+            WorkerPrimaryMessage::OthersBatch(digest, worker_id, _batch) => self
                 .tx_others_digests
                 .send((digest, worker_id))
                 .await

@@ -63,6 +63,9 @@ pub struct Parameters {
     /// The preferred header size. The primary creates a new header when it has enough parents and
     /// enough batches' digests to reach `header_size`. Denominated in bytes.
     pub header_size: usize,
+    /// Optional batch-count trigger for header creation. When set, the primary creates a new
+    /// header once it has accumulated this many worker batches (subject to parent availability).
+    pub max_header_batches: Option<usize>,
     /// The maximum delay that the primary waits between generating two headers, even if the header
     /// did not reach `max_header_size`. Denominated in ms.
     pub max_header_delay: u64,
@@ -85,6 +88,7 @@ impl Default for Parameters {
     fn default() -> Self {
         Self {
             header_size: 1_000,
+            max_header_batches: None,
             max_header_delay: 100,
             gc_depth: 50,
             sync_retry_delay: 5_000,
@@ -100,6 +104,9 @@ impl Import for Parameters {}
 impl Parameters {
     pub fn log(&self) {
         info!("Header size set to {} B", self.header_size);
+        if let Some(max_header_batches) = self.max_header_batches {
+            info!("Max header batches set to {} batch(es)", max_header_batches);
+        }
         info!("Max header delay set to {} ms", self.max_header_delay);
         info!("Garbage collection depth set to {} rounds", self.gc_depth);
         info!("Sync retry delay set to {} ms", self.sync_retry_delay);
