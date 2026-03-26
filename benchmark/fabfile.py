@@ -235,8 +235,8 @@ def cloudlab_remote(ctx, debug=True):
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        # 'rate_type': 'balanced',
-        'rate_type': 'imbalanced',
+        'rate_type': 'balanced',
+        # 'rate_type': 'imbalanced',
         'rate': [40000, 60000, 80000,100000,120000,140000],
         # 'rate': [20000],
         'tx_size': 512,
@@ -251,8 +251,8 @@ def cloudlab_remote(ctx, debug=True):
         'sync_retry_delay': 1000,  # ms
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500000,  # bytes
-        'max_batch_delay': 200,  # ms
-        's': 2.5
+        'max_batch_delay': 200  # ms
+        # 's': 2.5
     }
     try:
         _get_cloudlab_bench()(ctx).run(bench_params, node_params, debug)
