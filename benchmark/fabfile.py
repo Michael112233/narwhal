@@ -1,5 +1,7 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 from fabric import task
+from pathlib import Path
+import re
 
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
@@ -34,31 +36,125 @@ def _get_cloudlab_bench():
     return CloudLabBench
 
 
-@task
-def local(ctx, debug=True):
-    ''' Run benchmarks on localhost '''
-    bench_params = {
+def _local_bench_params():
+    return {
         'faults': 0,
         'nodes': 10,
         'workers': 1,
-        'rate_type': 'balanced',
-        'rate': 100000,
+        # 'rate_type': 'balanced',
+        'rate_type': 'imbalanced',
+        'rate': 20000,
         'tx_size': 512,
         'duration': 90,
-        'trigger_attack': True
+        # 'trigger_attack': True
     }
-    node_params = {
-        'header_size': 1_000,  # bytes
-        'max_header_delay': 100,  # ms
+
+
+def _fair_header_batches():
+    # Original Narwhal's default `header_size=1000` on digest-only headers is roughly
+    # 31 digests per header (1000 B / 32 B digest ~= 31).
+    return 31
+
+
+def _local_node_params():
+    return {
+        'header_size': 1_000,  # bytes, used when max_header_batches is not set
+        'max_header_batches': _fair_header_batches(),  # fair comparison mode
+        'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 200,  # ms
+        's': 2.5  # skew factor
     }
+
+
+def _print_vertex_stats(limit=50):
+    pattern = re.compile(
+        r'VERTEX_STATS round=(?P<round>\d+) payload_entries=(?P<entries>\d+) '
+        r'workload_bytes=(?P<workload>\d+) serialized_header_bytes=(?P<size>\d+)'
+    )
+    primary_logs = sorted(Path('logs').glob('primary-*.log'))
+    if not primary_logs:
+        Print.warn('No primary logs found under logs/')
+        return
+
+    rows_by_source = {}
+    for log_path in primary_logs:
+        source_rows = []
+        with log_path.open('r', errors='replace') as handle:
+            for line in handle:
+                match = pattern.search(line)
+                if match:
+                    source_rows.append({
+                        'source': log_path.name,
+                        'round': int(match.group('round')),
+                        'entries': int(match.group('entries')),
+                        'workload': int(match.group('workload')),
+                        'size': int(match.group('size')),
+                    })
+        if source_rows:
+            rows_by_source[log_path.name] = source_rows
+
+    if not rows_by_source:
+        Print.warn('No VERTEX_STATS lines found in primary logs')
+        return
+
+    Print.heading('\nVertex stats from primary logs')
+    for source, rows in rows_by_source.items():
+        Print.info(f'\n[{source}]')
+        shown_rows = rows if limit <= 0 else rows[:limit]
+        for row in shown_rows:
+            Print.info(
+                f"round={row['round']}, "
+                f"payload_entries={row['entries']}, "
+                f"workload_bytes={row['workload']}, "
+                f"serialized_header_bytes={row['size']}"
+            )
+        if limit > 0 and len(rows) > limit:
+            Print.info(f'... truncated {len(rows) - limit} additional vertex records for {source}')
+
+
+@task
+def local(ctx, debug=True, duration=None):
+    ''' Run benchmarks on localhost '''
+    bench_params = _local_bench_params()
+    node_params = _local_node_params()
+    if duration is not None:
+        bench_params['duration'] = int(duration)
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
         print(ret.result())
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def local_vertex(ctx, debug=True, duration=None, limit=50):
+    ''' Run local benchmark and print per-vertex sizes from primary logs '''
+    bench_params = _local_bench_params()
+    node_params = _local_node_params()
+
+    if duration is not None:
+        bench_params['duration'] = int(duration)
+    limit = int(limit)
+
+    Print.heading('Running local vertex inspection')
+    Print.info(
+        'Workload config: '
+        f"rate_type={bench_params['rate_type']}, "
+        f"rate={bench_params['rate']}, "
+        f"tx_size={bench_params['tx_size']}, "
+        f"duration={bench_params['duration']}, "
+        f"header_size={node_params['header_size']}, "
+        f"max_header_batches={node_params.get('max_header_batches', 'off')}"
+    )
+
+    try:
+        ret = LocalBench(bench_params, node_params).run(debug)
+        print(ret.result())
+        _print_vertex_stats(limit=limit)
     except BenchError as e:
         Print.error(e)
 
@@ -147,7 +243,8 @@ def remote(ctx, debug=False):
         'runs': 1,
     }
     node_params = {
-        'header_size': 1_000,  # bytes
+        'header_size': 1_000,  # bytes, used when max_header_batches is not set
+        'max_header_batches': _fair_header_batches(),  # fair comparison mode
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 10_000,  # ms
@@ -243,7 +340,8 @@ def cloudlab_remote(ctx, debug=True):
         # 'trigger_attack': [True], 
     }
     node_params = {
-        'header_size': 1000,  # bytes
+        'header_size': 1000,  # bytes, used when max_header_batches is not set
+        'max_header_batches': _fair_header_batches(),  # fair comparison mode
         'max_header_delay': 100,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms

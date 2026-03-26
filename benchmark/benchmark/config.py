@@ -180,6 +180,9 @@ class NodeParameters:
         except KeyError as e:
             raise ConfigError(f'Malformed parameters: missing key {e}')
 
+        if 'max_header_batches' in json:
+            inputs += [json['max_header_batches']]
+
         if not all(isinstance(x, int) for x in inputs):
             raise ConfigError('Invalid parameters type')
 

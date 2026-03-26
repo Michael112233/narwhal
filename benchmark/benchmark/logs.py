@@ -116,9 +116,15 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        max_header_batches_match = search(r'Max header batches .* (\d+)', log)
         configs = {
             'header_size': int(
                 search(r'Header size .* (\d+)', log).group(1)
+            ),
+            'max_header_batches': (
+                int(max_header_batches_match.group(1))
+                if max_header_batches_match is not None
+                else None
             ),
             'max_header_delay': int(
                 search(r'Max header delay .* (\d+)', log).group(1)
@@ -199,12 +205,18 @@ class LogParser:
 
     def result(self):
         header_size = self.configs[0]['header_size']
+        max_header_batches = self.configs[0]['max_header_batches']
         max_header_delay = self.configs[0]['max_header_delay']
         gc_depth = self.configs[0]['gc_depth']
         sync_retry_delay = self.configs[0]['sync_retry_delay']
         sync_retry_nodes = self.configs[0]['sync_retry_nodes']
         batch_size = self.configs[0]['batch_size']
         max_batch_delay = self.configs[0]['max_batch_delay']
+        header_batches_line = (
+            f' Max header batches: {max_header_batches:,} batch(es)\n'
+            if max_header_batches is not None
+            else ''
+        )
 
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
@@ -213,35 +225,36 @@ class LogParser:
 
         return (
             '\n'
-            '-----------------------------------------\n'
-            ' SUMMARY:\n'
-            '-----------------------------------------\n'
-            ' + CONFIG:\n'
-            f' Faults: {self.faults} node(s)\n'
-            f' Committee size: {self.committee_size} node(s)\n'
-            f' Worker(s) per node: {self.workers} worker(s)\n'
-            f' Collocate primary and workers: {self.collocate}\n'
-            f' Input rate: {sum(self.rate):,} tx/s\n'
-            f' Transaction size: {self.size[0]:,} B\n'
-            f' Execution time: {round(duration):,} s\n'
-            '\n'
-            f' Header size: {header_size:,} B\n'
-            f' Max header delay: {max_header_delay:,} ms\n'
-            f' GC depth: {gc_depth:,} round(s)\n'
-            f' Sync retry delay: {sync_retry_delay:,} ms\n'
-            f' Sync retry nodes: {sync_retry_nodes:,} node(s)\n'
-            f' batch size: {batch_size:,} B\n'
-            f' Max batch delay: {max_batch_delay:,} ms\n'
-            '\n'
-            ' + RESULTS:\n'
-            f' Consensus TPS: {round(consensus_tps):,} tx/s\n'
-            f' Consensus BPS: {round(consensus_bps):,} B/s\n'
-            f' Consensus latency: {round(consensus_latency):,} ms\n'
-            '\n'
-            f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
-            f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
-            f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
-            '-----------------------------------------\n'
+            + '-----------------------------------------\n'
+            + ' SUMMARY:\n'
+            + '-----------------------------------------\n'
+            + ' + CONFIG:\n'
+            + f' Faults: {self.faults} node(s)\n'
+            + f' Committee size: {self.committee_size} node(s)\n'
+            + f' Worker(s) per node: {self.workers} worker(s)\n'
+            + f' Collocate primary and workers: {self.collocate}\n'
+            + f' Input rate: {sum(self.rate):,} tx/s\n'
+            + f' Transaction size: {self.size[0]:,} B\n'
+            + f' Execution time: {round(duration):,} s\n'
+            + '\n'
+            + f' Header size: {header_size:,} B\n'
+            + header_batches_line
+            + f' Max header delay: {max_header_delay:,} ms\n'
+            + f' GC depth: {gc_depth:,} round(s)\n'
+            + f' Sync retry delay: {sync_retry_delay:,} ms\n'
+            + f' Sync retry nodes: {sync_retry_nodes:,} node(s)\n'
+            + f' batch size: {batch_size:,} B\n'
+            + f' Max batch delay: {max_batch_delay:,} ms\n'
+            + '\n'
+            + ' + RESULTS:\n'
+            + f' Consensus TPS: {round(consensus_tps):,} tx/s\n'
+            + f' Consensus BPS: {round(consensus_bps):,} B/s\n'
+            + f' Consensus latency: {round(consensus_latency):,} ms\n'
+            + '\n'
+            + f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
+            + f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
+            + f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            + '-----------------------------------------\n'
         )
 
     def print(self, filename):
