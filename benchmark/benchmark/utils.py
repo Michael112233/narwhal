@@ -1,4 +1,5 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
+from datetime import datetime
 from os.path import join
 
 
@@ -11,6 +12,14 @@ class BenchError(Exception):
 
 
 class PathMaker:
+    @staticmethod
+    def _sanitize_tag(value):
+        assert isinstance(value, str) and value.strip()
+        return ''.join(
+            ch if ch.isalnum() or ch in ('-', '_') else '_'
+            for ch in value.strip()
+        )
+
     @staticmethod
     def binary_path():
         return join('..', 'target', 'release')
@@ -69,6 +78,64 @@ class PathMaker:
         return join(
             PathMaker.results_path(),
             f'bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+        )
+
+    @staticmethod
+    def run_context_file():
+        return '.last_benchmark_context.json'
+
+    @staticmethod
+    def run_id():
+        return datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    @staticmethod
+    def tagged_prefix(network_tag, workload_tag):
+        return (
+            f'{PathMaker._sanitize_tag(network_tag)}_'
+            f'{PathMaker._sanitize_tag(workload_tag)}'
+        )
+
+    @staticmethod
+    def experiment_path(network_tag, workload_tag, run_id):
+        return join(
+            PathMaker.results_path(),
+            PathMaker._sanitize_tag(network_tag),
+            PathMaker._sanitize_tag(workload_tag),
+            run_id,
+        )
+
+    @staticmethod
+    def summary_file(network_tag, workload_tag, run_id):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_summary.txt',
+        )
+
+    @staticmethod
+    def analysis_csv_file(network_tag, workload_tag, run_id, experiment_group=None):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        suffix = f'_exp{experiment_group}' if experiment_group is not None else ''
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_round_certificate_analysis{suffix}.csv',
+        )
+
+    @staticmethod
+    def pivot_csv_file(network_tag, workload_tag, run_id, experiment_group=None):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        suffix = f'_exp{experiment_group}' if experiment_group is not None else ''
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_round_end_time_pivot{suffix}.csv',
+        )
+
+    @staticmethod
+    def metadata_file(network_tag, workload_tag, run_id):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_metadata.json',
         )
 
     @staticmethod

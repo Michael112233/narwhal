@@ -2,6 +2,7 @@
 from fabric import task
 from pathlib import Path
 import re
+import subprocess
 
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
@@ -47,6 +48,37 @@ def _local_bench_params():
         'tx_size': 512,
         'duration': 90,
         # 'trigger_attack': True
+    }
+
+
+def _cloudlab_bench_params():
+    return {
+        'faults': 0,
+        'nodes': [10],
+        'workers': 1,
+        'collocate': True,
+        'rate_type': 'imbalanced',
+        'rate': [20000],
+        'tx_size': 512,
+        'duration': 120,
+        'runs': 2,
+        'workload_tag': 'imbalanced',
+        'network_tag': 'geo_uniform',
+        # 'trigger_attack': [True],
+    }
+
+
+def _cloudlab_node_params():
+    return {
+        'header_size': 1000,  # bytes, used when max_header_batches is not set
+        'max_header_batches': _fair_header_batches(),  # fair comparison mode
+        'max_header_delay': 200,  # ms
+        'gc_depth': 50,  # rounds
+        'sync_retry_delay': 1000,  # ms
+        'sync_retry_nodes': 7,  # number of nodes
+        'batch_size': 500000,  # bytes
+        'max_batch_delay': 200,  # ms
+        's':2.5
     }
 
 
@@ -279,6 +311,25 @@ def plot(ctx):
 
 
 @task
+def plot_round_end(ctx, input=None, output=None, nodes=None, average=True):
+    ''' Plot node round-end curves from a pivot CSV '''
+    command = ['python3', 'plot_round_end_from_csv.py']
+    if input:
+        command.extend(['--input', str(input)])
+    if output:
+        command.extend(['--output', str(output)])
+    if nodes:
+        command.extend(['--nodes', str(nodes)])
+    if not average:
+        command.append('--no-average')
+
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as e:
+        Print.error(BenchError('Failed to plot round-end CSV', e))
+
+
+@task
 def kill(ctx):
     ''' Stop execution on all machines (AWS) '''
     try:
@@ -327,28 +378,8 @@ def cloudlab_install(ctx):
 @task
 def cloudlab_remote(ctx, debug=True):
     ''' Run benchmarks on CloudLab '''
-    bench_params = {
-        'faults': 0,
-        'nodes': [10],
-        'workers': 1,
-        'collocate': True,
-        'rate_type': 'balanced',
-        'rate': [100000],
-        'tx_size': 512,
-        'duration': 120,
-        'runs': 2,
-        # 'trigger_attack': [True], 
-    }
-    node_params = {
-        'header_size': 1000,  # bytes, used when max_header_batches is not set
-        'max_header_batches': _fair_header_batches(),  # fair comparison mode
-        'max_header_delay': 100,  # ms
-        'gc_depth': 50,  # rounds
-        'sync_retry_delay': 1000,  # ms
-        'sync_retry_nodes': 7,  # number of nodes
-        'batch_size': 500000,  # bytes
-        'max_batch_delay': 200  # ms
-    }
+    bench_params = _cloudlab_bench_params()
+    node_params = _cloudlab_node_params()
     try:
         _get_cloudlab_bench()(ctx).run(bench_params, node_params, debug)
     except BenchError as e:

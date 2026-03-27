@@ -14,9 +14,12 @@ from paramiko.ssh_exception import PasswordRequiredException, SSHException
 from time import sleep
 from math import ceil
 from copy import deepcopy
+import json
+import os
 import subprocess
 import re
 import shlex
+import sys
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker
@@ -1066,36 +1069,48 @@ class CloudLabBench:
         except Exception as e:
             Print.warn(f'⚠ Failed to run download_logs.py: {e}')
             Print.warn('Logs may be incomplete')
-        
-        # After downloading logs, run processing script
-        Print.info('=' * 60)
-        Print.info('Processing logs...')
-        Print.info('=' * 60)
-        
-        try:
-            run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
-            
-            if run_benchmark_script.exists():
-                Print.info('Running run_cloudlab_benchmark.py --no-run to process logs...')
-                result = subprocess.run(
-                    [sys.executable, str(run_benchmark_script), '--no-run'],
-                    cwd=str(benchmark_dir),
-                    capture_output=False,  # Show output in real-time
-                    text=True
-                )
-                if result.returncode == 0:
-                    Print.info('✓ run_cloudlab_benchmark.py --no-run completed successfully')
-                else:
-                    Print.warn(f'⚠ run_cloudlab_benchmark.py --no-run exited with code {result.returncode}')
-            else:
-                Print.warn(f'⚠ run_cloudlab_benchmark.py not found at {run_benchmark_script}')
-        except Exception as e:
-            Print.warn(f'⚠ Failed to run run_cloudlab_benchmark.py --no-run: {e}')
-        
-        Print.info('=' * 60)
-        
+
         # Parse and return logs
         return LogParser.process(PathMaker.logs_path(), faults=faults)
+
+    def _process_logs_for_run(self, run_metadata):
+        """Generate summary/csv/pivot for the current run using its exact run context."""
+        benchmark_dir = Path(__file__).parent.parent
+        run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
+
+        if not run_benchmark_script.exists():
+            Print.warn(f'⚠ run_cloudlab_benchmark.py not found at {run_benchmark_script}')
+            return
+
+        Path(PathMaker.run_context_file()).write_text(json.dumps(run_metadata, indent=2) + '\n')
+
+        env = os.environ.copy()
+        env['NARWHAL_BENCH_RUN_ID'] = run_metadata['run_id']
+
+        Print.info('=' * 60)
+        Print.info(f"Processing logs for {run_metadata['run_id']}...")
+        Print.info('=' * 60)
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(run_benchmark_script),
+                    '--no-run',
+                    '--num-nodes',
+                    str(run_metadata['nodes']),
+                ],
+                cwd=str(benchmark_dir),
+                env=env,
+                capture_output=False,
+                text=True,
+            )
+            if result.returncode == 0:
+                Print.info('✓ run_cloudlab_benchmark.py --no-run completed successfully')
+            else:
+                Print.warn(f'⚠ run_cloudlab_benchmark.py --no-run exited with code {result.returncode}')
+        except Exception as e:
+            Print.warn(f'⚠ Failed to run run_cloudlab_benchmark.py --no-run: {e}')
+        Print.info('=' * 60)
     
     def _background_run(self, host_info, command, log_file):
         """Run a command in the background using nohup on a remote host"""
@@ -1630,6 +1645,13 @@ SCRIPTEOF'''
             node_parameters = NodeParameters(node_parameters_dict)
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
+
+        network_tag = bench_parameters_dict.get('network_tag', 'unknown_network')
+        workload_tag = bench_parameters_dict.get(
+            'workload_tag',
+            bench_parameters_dict.get('rate_type', 'unknown_workload'),
+        )
+        base_run_id = os.environ.get('NARWHAL_BENCH_RUN_ID') or PathMaker.run_id()
         
         # Select which hosts to use
         selected_hosts = self._select_hosts(bench_parameters)
@@ -1666,6 +1688,7 @@ SCRIPTEOF'''
                     
                     # Run benchmarks for this configuration
                     for run in range(bench_parameters.runs):
+                        run_id = f'{base_run_id}_n{n}_r{rate}_run{run + 1}'
                         attack_str = f", attack={'ON' if trigger_attack else 'OFF'}" if trigger_attack is not None else ""
                         Print.heading(f'\nRunning benchmark: nodes={n}, rate={rate}{attack_str}, run={run+1}/{bench_parameters.runs}')
                         
@@ -1677,14 +1700,35 @@ SCRIPTEOF'''
                             
                             # Download and parse logs
                             result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
-                            result.print(PathMaker.result_file(
-                                bench_parameters.faults,
-                                n,
-                                bench_parameters.workers,
-                                bench_parameters.collocate,
-                                rate,
-                                bench_parameters.tx_size,
-                            ))
+                            summary_file = PathMaker.summary_file(network_tag, workload_tag, run_id)
+                            summary_path = Path(summary_file)
+                            summary_path.parent.mkdir(parents=True, exist_ok=True)
+                            summary_path.write_text(result.result())
+
+                            run_metadata = {
+                                'run_id': run_id,
+                                'network_tag': network_tag,
+                                'workload_tag': workload_tag,
+                                'faults': bench_parameters.faults,
+                                'nodes': n,
+                                'workers': bench_parameters.workers,
+                                'collocate': bench_parameters.collocate,
+                                'rate': rate,
+                                'rate_type': bench_parameters.rate_type,
+                                'tx_size': bench_parameters.tx_size,
+                                'duration': bench_parameters.duration,
+                                'run_index': run + 1,
+                                'runs_total': bench_parameters.runs,
+                                'node_parameters': node_parameters.json,
+                                'trigger_attack': trigger_attack,
+                            }
+                            metadata_file = PathMaker.metadata_file(network_tag, workload_tag, run_id)
+                            Path(metadata_file).write_text(json.dumps(run_metadata, indent=2) + '\n')
+                            Path(PathMaker.run_context_file()).write_text(
+                                json.dumps(run_metadata, indent=2) + '\n'
+                            )
+                            self._process_logs_for_run(run_metadata)
+                            Print.info(f'Saved summary to: {summary_file}')
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:
                             self.kill(hosts=selected_hosts)
                             if isinstance(e, GroupException):
