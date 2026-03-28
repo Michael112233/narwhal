@@ -40,8 +40,8 @@ CSV_PATH = (
 )
 
 NODE_ID = 9
-START_ROUND = 700
-END_ROUND = 1500
+START_ROUND = 1150
+END_ROUND = 1200
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
 
@@ -176,7 +176,7 @@ def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_r
     plt.close(fig)
 
 
-def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_round, end_round):
+def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_round=None, end_round=None):
     rounds = [_to_int(row["Round"]) for row in rows]
     sorted_rows = [_sorted_certificate_values(row, cert_columns) for row in rows]
 
