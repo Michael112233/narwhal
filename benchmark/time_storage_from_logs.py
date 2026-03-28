@@ -8,6 +8,7 @@ import re
 import csv
 from datetime import datetime
 from collections import defaultdict
+from pathlib import Path
 
 
 def parse_timestamp(timestamp_str):
@@ -26,6 +27,27 @@ def parse_timestamp(timestamp_str):
     except Exception as e:
         print(f"Error parsing timestamp {timestamp_str}: {e}")
         return None
+
+
+def load_client_start_time(logs_dir='logs'):
+    """Return the earliest client "Start sending transactions" timestamp."""
+    pattern = re.compile(r'\[(.*?Z)\s+.*?\]\s+.*?Start sending transactions')
+    start_times = []
+
+    for log_path in sorted(Path(logs_dir).glob('client-*.log')):
+        try:
+            with log_path.open('r') as handle:
+                for line in handle:
+                    match = pattern.search(line)
+                    if match:
+                        posix = parse_timestamp(match.group(1))
+                        if posix is not None:
+                            start_times.append(posix)
+                        break
+        except FileNotFoundError:
+            continue
+
+    return min(start_times) if start_times else None
 
 
 def parse_log_file(log_file_path):
@@ -83,6 +105,20 @@ def extract_round_info(round_time_info, node_id):
             })
     
     return round_info
+
+
+def filter_round_info_by_client_start(round_info, client_start_posix):
+    """Drop warmup rounds whose start time is before client traffic begins."""
+    if client_start_posix is None:
+        return round_info
+
+    filtered = []
+    for item in round_info:
+        round_start_posix = parse_timestamp(item.get('time_stamp', ''))
+        if round_start_posix is None or round_start_posix < client_start_posix:
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def calculate_round_end_times(round_info):
@@ -297,6 +333,8 @@ def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
     """
     log_file_path = f'{logs_dir}/primary-{node_id}.log'
     
+    client_start_posix = load_client_start_time(logs_dir)
+
     # Parse log file
     round_time_info, certificate_info = parse_log_file(log_file_path)
     if not round_time_info and not certificate_info:
@@ -305,6 +343,10 @@ def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
     
     # Extract round information
     round_info = extract_round_info(round_time_info, node_id)
+    round_info = filter_round_info_by_client_start(round_info, client_start_posix)
+    if not round_info:
+        print(f"Node {node_id}: No rounds after client traffic start, skipping...")
+        return
     
     # Calculate round end times (next round start time)
     calculate_round_end_times(round_info)

@@ -79,6 +79,7 @@ class LogParser:
             )
 
         self.vertex_stats = {}
+        self.warmup_start = min(self.start) if self.start else None
 
     def _merge_results(self, input):
         # Keep the earliest timestamp.
@@ -171,9 +172,9 @@ class LogParser:
         return datetime.timestamp(x)
 
     @staticmethod
-    def _collect_vertex_stats(directory):
+    def _collect_vertex_stats(directory, warmup_start=None):
         pattern = compile(
-            r'VERTEX_STATS round=(?P<round>\d+) payload_entries=(?P<entries>\d+) '
+            r'\[(?P<timestamp>.*?Z)\s+.*?\]\s+.*?VERTEX_STATS round=(?P<round>\d+) payload_entries=(?P<entries>\d+) '
             r'workload_bytes=(?P<workload>\d+) serialized_header_bytes=(?P<size>\d+)'
         )
         rows_by_source = {}
@@ -184,7 +185,13 @@ class LogParser:
                 for line in handle:
                     match = pattern.search(line)
                     if match:
+                        timestamp = LogParser._to_posix(
+                            LogParser, match.group('timestamp')
+                        )
+                        if warmup_start is not None and timestamp < warmup_start:
+                            continue
                         rows.append({
+                            'timestamp': timestamp,
                             'round': int(match.group('round')),
                             'entries': int(match.group('entries')),
                             'workload': int(match.group('workload')),
@@ -233,6 +240,7 @@ class LogParser:
         lines = [
             '\n',
             ' + VERTEX STATS:\n',
+            ' Vertex stats exclude warmup rounds before the first client started sending transactions.\n',
             f' Vertex samples observed: {total_vertices:,}\n',
             f' Non-empty vertices: {len(non_empty_vertices):,} / {total_vertices:,}\n',
             f' Empty vertices: {zero_vertices:,} / {total_vertices:,}\n',
@@ -393,5 +401,8 @@ class LogParser:
                 workers += [f.read()]
 
         parser = cls(clients, primaries, workers, faults=faults)
-        parser.vertex_stats = cls._collect_vertex_stats(directory)
+        parser.vertex_stats = cls._collect_vertex_stats(
+            directory,
+            warmup_start=parser.warmup_start,
+        )
         return parser

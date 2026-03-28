@@ -27,14 +27,21 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # Configuration: edit these values directly when you want a different plot.
 # ============================================================================
 # Default to the current run's analysis CSV.
+# CSV_PATH = (
+#     "results/geo_uniform/imbalanced/"
+#     "20260328_051308_n10_r40000_run2/"
+#     "geo_uniform_imbalanced_round_certificate_analysis.csv"
+# )
+
 CSV_PATH = (
-    "results/geo_uniform/imbalanced/"
-    "20260328_051308_n10_r40000_run2/"
-    "geo_uniform_imbalanced_round_certificate_analysis.csv"
+    "results/no_delay/custom5_5/"
+    "20260328_063819_n10_r40000_run2/"
+    "no_delay_custom5_5_round_certificate_analysis.csv"
 )
-NODE_ID = 0
-START_ROUND = 793
-END_ROUND = 1900
+
+NODE_ID = 9
+START_ROUND = 700
+END_ROUND = 1500
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
 
@@ -99,6 +106,12 @@ def _to_float(value):
     return float(value) if value not in (None, "") else None
 
 
+def _sorted_certificate_values(row, cert_columns):
+    values = [_to_float(row.get(column)) for column in cert_columns]
+    values = [value for value in values if value is not None]
+    return sorted(values)
+
+
 def filter_certificate_rows(rows, node_id, start_round, end_round):
     filtered = []
     for row in rows:
@@ -135,16 +148,16 @@ def _all_rounds_label():
 
 
 def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_round, output_path):
+    sorted_rows = [_sorted_certificate_values(row, cert_columns) for row in rows]
     averages = []
     progress = []
 
-    for index, column in enumerate(cert_columns, start=1):
-        values = [_to_float(row.get(column)) for row in rows]
-        values = [value for value in values if value is not None]
+    for index in range(len(cert_columns)):
+        values = [values[index] for values in sorted_rows if len(values) > index]
         if not values:
             continue
         averages.append(sum(values) / len(values))
-        progress.append(index)
+        progress.append(index + 1)
 
     if not averages:
         raise ValueError("No certificate latency values available in the selected range.")
@@ -155,7 +168,7 @@ def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_r
         f"Progress vs. Avg Latency\nNode {node_id}, {_range_label(start_round, end_round)}"
     )
     ax.set_xlabel("Average Time Delta (ms)")
-    ax.set_ylabel("Certificate Collection Progress")
+    ax.set_ylabel("Certificate Arrival Rank")
     ax.set_yticks(progress)
     ax.grid(True, linestyle="--", alpha=0.4)
     fig.tight_layout()
@@ -165,13 +178,14 @@ def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_r
 
 def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_round, end_round):
     rounds = [_to_int(row["Round"]) for row in rows]
+    sorted_rows = [_sorted_certificate_values(row, cert_columns) for row in rows]
 
     fig, ax = plt.subplots(figsize=(11, 6))
     cmap = plt.get_cmap("tab10")
 
     plotted = False
-    for index, column in enumerate(cert_columns, start=1):
-        values = [_to_float(row.get(column)) for row in rows]
+    for index in range(len(cert_columns)):
+        values = [values[index] if len(values) > index else None for values in sorted_rows]
         if not any(value is not None for value in values):
             continue
         ax.plot(
@@ -180,8 +194,8 @@ def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_rou
             marker="o",
             markersize=3,
             linewidth=1.5,
-            label=f"Cert {index}",
-            color=cmap((index - 1) % 10),
+            label=f"Arrival {index + 1}",
+            color=cmap(index % 10),
         )
         plotted = True
 
@@ -201,7 +215,7 @@ def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_rou
     ax.set_ylabel("Time Delta (ms)")
     ax.set_ylim(0, 1000)
     ax.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(title="Certificate", ncol=2)
+    ax.legend(title="Arrival Order", ncol=2)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
