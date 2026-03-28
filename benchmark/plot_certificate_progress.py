@@ -29,12 +29,12 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # Default to the current run's analysis CSV.
 CSV_PATH = (
     "results/geo_uniform/imbalanced/"
-    "20260328_025355_n10_r40000_run2/"
+    "20260328_051308_n10_r40000_run2/"
     "geo_uniform_imbalanced_round_certificate_analysis.csv"
 )
 NODE_ID = 0
-START_ROUND = 10
-END_ROUND = 100
+START_ROUND = 793
+END_ROUND = 1900
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
 
@@ -163,7 +163,7 @@ def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_r
     plt.close(fig)
 
 
-def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_round=None, end_round=None):
+def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_round, end_round):
     rounds = [_to_int(row["Round"]) for row in rows]
 
     fig, ax = plt.subplots(figsize=(11, 6))
@@ -199,7 +199,7 @@ def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_rou
     )
     ax.set_xlabel("Round")
     ax.set_ylabel("Time Delta (ms)")
-    ax.set_ylim(0, 100)
+    ax.set_ylim(0, 1000)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(title="Certificate", ncol=2)
     fig.tight_layout()
@@ -240,6 +240,8 @@ def plot_certificate_figures(csv_path, node_id, start_round, end_round, output_d
         cert_columns,
         node_id,
         trend_path,
+        start_round,
+        end_round,
     )
 
     return progress_path, trend_path
