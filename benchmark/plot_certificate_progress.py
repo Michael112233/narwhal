@@ -34,9 +34,9 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # )
 
 CSV_PATH = (
-    "results/no_delay/custom_all_1/"
-    "20260328_082836_n10_r40000_run1/"
-    "no_delay_custom_all_1_round_certificate_analysis.csv"
+    "results/no_delay/custom_1_20/"
+    "20260328_090840_n10_r40000_run1/"
+    "no_delay_custom_1_20_round_certificate_analysis.csv"
 )
 
 NODE_ID = 0

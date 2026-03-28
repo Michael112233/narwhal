@@ -75,13 +75,13 @@ def _cloudlab_bench_params():
         'collocate': True,
         # 'rate_type': 'imbalanced',
         'rate_type': 'custom',
-        'percentages': [1, 1, 1, 1, 1, 1, 20, 20, 20, 20],
-        'rate': [40000],
+        'percentages': [1, 1, 20, 20, 20, 20, 20, 20, 20, 20],
+        'rate': [40000,100000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
         'workload_tag': 'custom_1_20',
-        'network_tag': 'no_delay',
+        'network_tag': 'geo',
         # 'trigger_attack': [True],
     }
 
