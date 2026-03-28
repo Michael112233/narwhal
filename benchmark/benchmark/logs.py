@@ -3,7 +3,7 @@ from datetime import datetime
 from glob import glob
 from multiprocessing import Pool
 from os.path import join
-from re import findall, search
+from re import compile, findall, search
 from statistics import mean
 
 from benchmark.utils import Print
@@ -77,6 +77,8 @@ class LogParser:
             Print.warn(
                 f'Clients missed their target rate {self.misses:,} time(s)'
             )
+
+        self.vertex_stats = {}
 
     def _merge_results(self, input):
         # Keep the earliest timestamp.
@@ -168,6 +170,115 @@ class LogParser:
         x = datetime.fromisoformat(string.replace('Z', '+00:00'))
         return datetime.timestamp(x)
 
+    @staticmethod
+    def _collect_vertex_stats(directory):
+        pattern = compile(
+            r'VERTEX_STATS round=(?P<round>\d+) payload_entries=(?P<entries>\d+) '
+            r'workload_bytes=(?P<workload>\d+) serialized_header_bytes=(?P<size>\d+)'
+        )
+        rows_by_source = {}
+        for filename in sorted(glob(join(directory, 'primary-*.log'))):
+            source = filename.split('/')[-1]
+            rows = []
+            with open(filename, 'r') as handle:
+                for line in handle:
+                    match = pattern.search(line)
+                    if match:
+                        rows.append({
+                            'round': int(match.group('round')),
+                            'entries': int(match.group('entries')),
+                            'workload': int(match.group('workload')),
+                            'size': int(match.group('size')),
+                        })
+            if rows:
+                rows_by_source[source] = rows
+        return rows_by_source
+
+    @staticmethod
+    def _percentile(values, percentile):
+        if not values:
+            return 0
+        ordered = sorted(values)
+        index = round((len(ordered) - 1) * percentile)
+        return ordered[index]
+
+    @classmethod
+    def _format_distribution(cls, values):
+        if not values:
+            return 'avg=0 B, p50=0 B, p90=0 B, min=0 B, max=0 B'
+        return (
+            f'avg={round(mean(values)):,} B, '
+            f'p50={cls._percentile(values, 0.50):,} B, '
+            f'p90={cls._percentile(values, 0.90):,} B, '
+            f'min={min(values):,} B, '
+            f'max={max(values):,} B'
+        )
+
+    def _vertex_stats_summary(self):
+        if not self.vertex_stats:
+            return ''
+
+        all_rows = [row for rows in self.vertex_stats.values() for row in rows]
+        if not all_rows:
+            return ''
+
+        total_vertices = len(all_rows)
+        non_empty_vertices = [row for row in all_rows if row['workload'] > 0]
+        zero_vertices = total_vertices - len(non_empty_vertices)
+        serialized_sizes = [row['size'] for row in all_rows]
+        workload_sizes = [row['workload'] for row in all_rows]
+        non_empty_serialized_sizes = [row['size'] for row in non_empty_vertices]
+        non_empty_workload_sizes = [row['workload'] for row in non_empty_vertices]
+
+        lines = [
+            '\n',
+            ' + VERTEX STATS:\n',
+            f' Vertex samples observed: {total_vertices:,}\n',
+            f' Non-empty vertices: {len(non_empty_vertices):,} / {total_vertices:,}\n',
+            f' Empty vertices: {zero_vertices:,} / {total_vertices:,}\n',
+            f' Serialized vertex size (all): {self._format_distribution(serialized_sizes)}\n',
+            f' Inlined workload bytes (all): {self._format_distribution(workload_sizes)}\n',
+            f' Serialized vertex size (non-empty only): '
+            f'{self._format_distribution(non_empty_serialized_sizes)}\n',
+            f' Inlined workload bytes (non-empty only): '
+            f'{self._format_distribution(non_empty_workload_sizes)}\n',
+            ' Per-node comparison (non-empty vertices only):\n',
+        ]
+
+        for source, rows in sorted(self.vertex_stats.items()):
+            non_empty_rows = [row for row in rows if row['workload'] > 0]
+            non_empty_ratio = (
+                (len(non_empty_rows) / len(rows) * 100)
+                if rows else 0
+            )
+
+            if non_empty_rows:
+                node_sizes = [row['size'] for row in non_empty_rows]
+                node_workloads = [row['workload'] for row in non_empty_rows]
+                node_entries = [row['entries'] for row in non_empty_rows]
+                first_non_empty_round = min(row['round'] for row in non_empty_rows)
+                last_non_empty_round = max(row['round'] for row in non_empty_rows)
+                lines.append(
+                    f'  {source}: non_empty={len(non_empty_rows):,}/{len(rows):,} '
+                    f'({non_empty_ratio:.1f}%), '
+                    f'avg_size={round(mean(node_sizes)):,} B, '
+                    f'p50_size={self._percentile(node_sizes, 0.50):,} B, '
+                    f'p90_size={self._percentile(node_sizes, 0.90):,} B, '
+                    f'max_size={max(node_sizes):,} B, '
+                    f'avg_workload={round(mean(node_workloads)):,} B, '
+                    f'avg_entries={round(mean(node_entries)):,}, '
+                    f'active_rounds={first_non_empty_round}-{last_non_empty_round}\n'
+                )
+            else:
+                lines.append(
+                    f'  {source}: non_empty=0/{len(rows):,} (0.0%), '
+                    'avg_size=0 B, p50_size=0 B, p90_size=0 B, '
+                    'max_size=0 B, avg_workload=0 B, avg_entries=0, '
+                    'active_rounds=none\n'
+                )
+
+        return ''.join(lines)
+
     def _consensus_throughput(self):
         if not self.commits or not self.proposals:
             return 0, 0, 0
@@ -222,6 +333,7 @@ class LogParser:
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
+        vertex_stats_block = self._vertex_stats_summary()
 
         return (
             '\n'
@@ -254,6 +366,7 @@ class LogParser:
             + f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             + f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             + f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            + vertex_stats_block
             + '-----------------------------------------\n'
         )
 
@@ -279,4 +392,6 @@ class LogParser:
             with open(filename, 'r') as f:
                 workers += [f.read()]
 
-        return cls(clients, primaries, workers, faults=faults)
+        parser = cls(clients, primaries, workers, faults=faults)
+        parser.vertex_stats = cls._collect_vertex_stats(directory)
+        return parser
