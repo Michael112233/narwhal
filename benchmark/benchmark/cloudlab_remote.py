@@ -718,7 +718,7 @@ class CloudLabBench:
             for (username, port), hostnames in hosts_by_config.items():
                 conn_kwargs = self._get_connection_kwargs({})
                 g = Group(*hostnames, user=username, port=port, connect_kwargs=conn_kwargs, connect_timeout=60)
-                g.run(' && '.join(cmd), hide=False)
+                g.run(' && '.join(cmd), hide=True)
                 
                 # Modify attack.rs AFTER git operations (so the file exists)
                 if trigger_attack is not None:
