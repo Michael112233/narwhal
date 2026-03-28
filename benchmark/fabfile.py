@@ -50,6 +50,19 @@ def _local_bench_params():
         # 'trigger_attack': True
     }
 
+def _local_node_params():
+    return {
+        'header_size': 16_000,  # bytes, used when max_header_batches is not set
+        # 'max_header_batches': _fair_header_batches(),  # fair comparison mode
+        'max_header_delay': 15,  # ms
+        'gc_depth': 50,  # rounds
+        'sync_retry_delay': 10_000,  # ms
+        'sync_retry_nodes': 4,  # number of nodes
+        'batch_size': 16_000,  # bytes
+        'max_batch_delay': 10,  # ms
+        's': 2.5  # skew factor
+    }
+
 
 def _cloudlab_bench_params():
     return {
@@ -58,7 +71,7 @@ def _cloudlab_bench_params():
         'workers': 1,
         'collocate': True,
         'rate_type': 'imbalanced',
-        'rate': [20000],
+        'rate': [40000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
@@ -72,12 +85,12 @@ def _cloudlab_node_params():
     return {
         'header_size': 1000,  # bytes, used when max_header_batches is not set
         'max_header_batches': _fair_header_batches(),  # fair comparison mode
-        'max_header_delay': 200,  # ms
+        'max_header_delay': 20,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500000,  # bytes
-        'max_batch_delay': 200,  # ms
+        'max_batch_delay': 10,  # ms
         's':2.5
     }
 
@@ -85,21 +98,10 @@ def _cloudlab_node_params():
 def _fair_header_batches():
     # Original Narwhal's default `header_size=1000` on digest-only headers is roughly
     # 31 digests per header (1000 B / 32 B digest ~= 31).
-    return 31
+    return 3
 
 
-def _local_node_params():
-    return {
-        'header_size': 1_000,  # bytes, used when max_header_batches is not set
-        'max_header_batches': _fair_header_batches(),  # fair comparison mode
-        'max_header_delay': 200,  # ms
-        'gc_depth': 50,  # rounds
-        'sync_retry_delay': 10_000,  # ms
-        'sync_retry_nodes': 4,  # number of nodes
-        'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200,  # ms
-        's': 2.5  # skew factor
-    }
+
 
 
 def _print_vertex_stats(limit=50):
@@ -163,7 +165,7 @@ def local(ctx, debug=True, duration=None):
 
 
 @task
-def local_vertex(ctx, debug=True, duration=None, limit=50):
+def local_vertex(ctx, debug=True, duration=None, limit=10):
     ''' Run local benchmark and print per-vertex sizes from primary logs '''
     bench_params = _local_bench_params()
     node_params = _local_node_params()
