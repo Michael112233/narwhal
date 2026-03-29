@@ -78,7 +78,7 @@ def _cloudlab_bench_params():
         'percentages': [1, 1, 1, 1, 25, 25, 30, 30, 30, 30],
         'rate': [100000,120000,140000],
         'tx_size': 512,
-        'duration': 350,
+        'duration': 500,
         'runs': 2,
         'workload_tag': 'custom_1_25_30',
         'network_tag': 'geo',
