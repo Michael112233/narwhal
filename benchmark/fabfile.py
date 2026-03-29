@@ -80,7 +80,7 @@ def _cloudlab_bench_params():
         'tx_size': 512,
         'duration': 300,
         'runs': 2,
-        'workload_tag': 'custom_1_25_30',
+        'workload_tag': 'balanced',
         'network_tag': 'geo',
         # 'trigger_attack': [True],
     }
