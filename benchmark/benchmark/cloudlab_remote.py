@@ -29,6 +29,59 @@ from benchmark.cloudlab_instance import CloudLabInstanceManager
 from benchmark.imbalanced_rate import ZipfAllocator, ExtremeAllocator, ParetoAllocator, TwoHeavyAllocator, ExtremeXAllocator, CustomAllocator
 
 
+def _aggregate_worker_rates_by_node(worker_rates, workers_per_node, num_nodes):
+    node_rates = []
+    index = 0
+    for _ in range(num_nodes):
+        node_rates.append(sum(worker_rates[index:index + workers_per_node]))
+        index += workers_per_node
+    return node_rates
+
+
+def _build_workload_details(rate, num_nodes, workers_per_node, bench_parameters, node_parameters):
+    rate_type = bench_parameters.rate_type
+    workers_total = num_nodes * workers_per_node
+    details = {'rate_type': rate_type}
+
+    if rate_type == 'balanced':
+        worker_rate = ceil(rate / workers_total)
+        worker_rates = [worker_rate] * workers_total
+        details['worker_rates'] = worker_rates
+        details['node_rates'] = _aggregate_worker_rates_by_node(
+            worker_rates,
+            workers_per_node,
+            num_nodes,
+        )
+    elif rate_type in ('imbalanced', 'imbalance'):
+        s = node_parameters.json.get('s')
+        worker_rates = ZipfAllocator(rate, workers_total, float(s)).allocate()
+        details['zipf_s'] = s
+        details['worker_rates'] = worker_rates
+        details['node_rates'] = _aggregate_worker_rates_by_node(
+            worker_rates,
+            workers_per_node,
+            num_nodes,
+        )
+    elif rate_type == 'extreme':
+        details['node_rates'] = ExtremeAllocator(rate, num_nodes).allocate()
+    elif rate_type == 'extreme_x':
+        x = getattr(bench_parameters, 'extreme_x', None)
+        details['extreme_x'] = x
+        details['node_rates'] = ExtremeXAllocator(rate, num_nodes, x).allocate()
+    elif rate_type == 'pareto':
+        details['node_rates'] = ParetoAllocator(rate, num_nodes).allocate()
+    elif rate_type == 'twoheavy':
+        details['node_rates'] = TwoHeavyAllocator(rate, num_nodes).allocate()
+    elif rate_type == 'custom':
+        percentages = getattr(bench_parameters, 'percentages', None)
+        allocator = CustomAllocator(rate, num_nodes, percentages)
+        details['percentages_raw'] = percentages
+        details['percentages_normalized'] = allocator.percentages
+        details['node_rates'] = allocator.allocate()
+
+    return details
+
+
 class FabricError(Exception):
     """Wrapper for Fabric exception with a meaningful error message."""
     
@@ -1721,6 +1774,15 @@ SCRIPTEOF'''
                                 'runs_total': bench_parameters.runs,
                                 'node_parameters': node_parameters.json,
                                 'trigger_attack': trigger_attack,
+                                'percentages': getattr(bench_parameters, 'percentages', None),
+                                'extreme_x': getattr(bench_parameters, 'extreme_x', None),
+                                'workload_details': _build_workload_details(
+                                    rate,
+                                    n,
+                                    bench_parameters.workers,
+                                    bench_parameters,
+                                    node_parameters,
+                                ),
                             }
                             metadata_file = PathMaker.metadata_file(network_tag, workload_tag, run_id)
                             Path(metadata_file).write_text(json.dumps(run_metadata, indent=2) + '\n')

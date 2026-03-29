@@ -10,6 +10,8 @@ from datetime import datetime
 from collections import defaultdict
 from pathlib import Path
 
+from benchmark.origin_mapping import build_origin_mapping_from_files, resolve_origin
+
 
 def parse_timestamp(timestamp_str):
     """Convert ISO format timestamp to POSIX timestamp.
@@ -221,12 +223,17 @@ def process_certificates(certificate_info, round_info, round_info_dict):
                     'origin': origin
                 }
                 
-                # Check if certificate with same origin already exists, replace if found
+                # Keep the earliest observation for each (round, origin).
                 certs = round_info[idx]['certificates']
                 found_duplicate = False
                 for cert_idx, existing_cert in enumerate(certs):
                     if existing_cert.get('origin') == origin:
-                        certs[cert_idx] = new_cert
+                        existing_timestamp = existing_cert.get('timestamp')
+                        if (
+                            existing_timestamp in ('', None)
+                            or cert_timestamp < existing_timestamp
+                        ):
+                            certs[cert_idx] = new_cert
                         found_duplicate = True
                         break
                 
@@ -270,7 +277,24 @@ def format_timestamp(timestamp):
     return str(timestamp) if timestamp else ''
 
 
-def export_to_csv(round_info, csv_filename, write_header=False):
+def load_origin_mapping_if_available(
+    committee_path='.committee.json',
+    settings_path='cloudlab_settings.json',
+):
+    committee_file = Path(committee_path)
+    settings_file = Path(settings_path)
+
+    if not committee_file.exists() or not settings_file.exists():
+        return None
+
+    try:
+        return build_origin_mapping_from_files(committee_file, settings_file)
+    except Exception as e:
+        print(f'Warning: Could not load origin mapping: {e}')
+        return None
+
+
+def export_to_csv(round_info, csv_filename, write_header=False, origin_mapping=None):
     """Export round_info to CSV file.
     
     Args:
@@ -289,6 +313,10 @@ def export_to_csv(round_info, csv_filename, write_header=False):
             for j in range(1, max_certs + 1):
                 header.append(f'Certificate_{j}_Time_Delta_ms')
                 header.append(f'Certificate_{j}_Origin')
+                header.append(f'Certificate_{j}_Origin_Node_ID')
+                header.append(f'Certificate_{j}_Origin_IP')
+                header.append(f'Certificate_{j}_Origin_Region')
+                header.append(f'Certificate_{j}_Origin_Full_Public_Key')
             writer.writerow(header)
         
         # Write data rows
@@ -313,16 +341,25 @@ def export_to_csv(round_info, csv_filename, write_header=False):
             for j in range(max_certs):
                 if j < len(certs):
                     cert = certs[j]
+                    resolved = resolve_origin(cert.get('origin', ''), origin_mapping or [])
                     row.append(format_timestamp(cert.get('timestamp', '')))
                     row.append(cert.get('origin', ''))
+                    row.append(resolved.get('node_id', ''))
+                    row.append(resolved.get('ip', ''))
+                    row.append(resolved.get('region', ''))
+                    row.append(resolved.get('full_public_key', ''))
                 else:
+                    row.append('')
+                    row.append('')
+                    row.append('')
+                    row.append('')
                     row.append('')
                     row.append('')
             
             writer.writerow(row)
 
 
-def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
+def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs', origin_mapping=None):
     """Process a single node's log file.
     
     Args:
@@ -361,7 +398,12 @@ def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
     
     # Export to CSV
     write_header = (node_id == 0)
-    export_to_csv(round_info, csv_filename, write_header)
+    export_to_csv(
+        round_info,
+        csv_filename,
+        write_header,
+        origin_mapping=origin_mapping,
+    )
     print(f"Node {node_id}: CSV exported to {csv_filename}\n")
 
 
@@ -425,6 +467,7 @@ def main():
     csv_filename = 'round_certificate_analysis.csv'
     pivot_filename = 'round_end_time_pivot.csv'
     logs_dir = 'logs'
+    origin_mapping = load_origin_mapping_if_available()
     
     print("=" * 80)
     print("Narwhal Log Analysis - Round and Certificate Extraction")
@@ -432,7 +475,13 @@ def main():
     print(f"Processing {num_nodes} nodes...\n")
     
     for node_id in range(num_nodes):
-        process_node_log(node_id, csv_filename, num_nodes, logs_dir=logs_dir)
+        process_node_log(
+            node_id,
+            csv_filename,
+            num_nodes,
+            logs_dir=logs_dir,
+            origin_mapping=origin_mapping,
+        )
     
     print("=" * 80)
     print(f"Analysis complete! Results saved to: {csv_filename}")

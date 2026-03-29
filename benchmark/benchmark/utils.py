@@ -139,6 +139,30 @@ class PathMaker:
         )
 
     @staticmethod
+    def committee_snapshot_file(network_tag, workload_tag, run_id):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_committee.json',
+        )
+
+    @staticmethod
+    def settings_snapshot_file(network_tag, workload_tag, run_id):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_cloudlab_settings.json',
+        )
+
+    @staticmethod
+    def origin_mapping_file(network_tag, workload_tag, run_id):
+        prefix = PathMaker.tagged_prefix(network_tag, workload_tag)
+        return join(
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
+            f'{prefix}_origin_mapping.json',
+        )
+
+    @staticmethod
     def plots_path():
         return 'plots'
 

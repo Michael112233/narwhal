@@ -6,6 +6,7 @@ Run CloudLab benchmarks and post-process logs using the current run directory la
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from benchmark.logs import LogParser, ParseError
+from benchmark.origin_mapping import build_origin_mapping_from_files, mapping_payload
 from benchmark.utils import PathMaker, Print
 
 try:
@@ -101,6 +103,155 @@ def _metadata_path(run_context):
     )
 
 
+def _committee_snapshot_path(run_context):
+    return Path(
+        PathMaker.committee_snapshot_file(
+            run_context['network_tag'],
+            run_context['workload_tag'],
+            run_context['run_id'],
+        )
+    )
+
+
+def _settings_snapshot_path(run_context):
+    return Path(
+        PathMaker.settings_snapshot_file(
+            run_context['network_tag'],
+            run_context['workload_tag'],
+            run_context['run_id'],
+        )
+    )
+
+
+def _origin_mapping_path(run_context):
+    return Path(
+        PathMaker.origin_mapping_file(
+            run_context['network_tag'],
+            run_context['workload_tag'],
+            run_context['run_id'],
+        )
+    )
+
+
+def _copy_snapshot_if_available(source_path, destination_path):
+    source = Path(source_path)
+    if not source.exists():
+        return False
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination_path)
+    return True
+
+
+def _prepare_origin_mapping_artifacts(run_context, settings_file='cloudlab_settings.json'):
+    _ensure_experiment_dir(run_context)
+
+    committee_snapshot = _committee_snapshot_path(run_context)
+    settings_snapshot = _settings_snapshot_path(run_context)
+    origin_mapping_file = _origin_mapping_path(run_context)
+
+    _copy_snapshot_if_available(PathMaker.committee_file(), committee_snapshot)
+    _copy_snapshot_if_available(settings_file, settings_snapshot)
+
+    committee_path = None
+    settings_path = None
+
+    if committee_snapshot.exists():
+        committee_path = committee_snapshot
+    elif Path(PathMaker.committee_file()).exists():
+        committee_path = Path(PathMaker.committee_file())
+
+    if settings_snapshot.exists():
+        settings_path = settings_snapshot
+    elif Path(settings_file).exists():
+        settings_path = Path(settings_file)
+
+    entries = []
+    if committee_path and settings_path:
+        try:
+            entries = build_origin_mapping_from_files(committee_path, settings_path)
+            origin_mapping_file.write_text(
+                json.dumps(mapping_payload(entries), indent=2) + '\n'
+            )
+        except Exception as e:
+            Print.warn(f'Failed to build origin mapping: {e}')
+
+    return {
+        'entries': entries,
+        'committee_path': str(committee_path) if committee_path else None,
+        'settings_path': str(settings_path) if settings_path else None,
+        'origin_mapping_path': str(origin_mapping_file) if origin_mapping_file.exists() else None,
+    }
+
+
+def _annotate_summary_with_run_context(summary_text, run_context):
+    config_marker = ' + CONFIG:\n'
+    if config_marker not in summary_text:
+        return summary_text
+
+    def _format_number_list(values, decimals=None, as_percent=False):
+        parts = []
+        for value in values:
+            if isinstance(value, float) and decimals is not None:
+                rendered = f'{value * 100:.{decimals}f}%' if as_percent else f'{value:.{decimals}f}'
+            else:
+                rendered = str(value)
+            parts.append(rendered)
+        return '[' + ', '.join(parts) + ']'
+
+    context_lines = []
+    network_tag = run_context.get('network_tag')
+    workload_tag = run_context.get('workload_tag')
+    rate_type = run_context.get('rate_type')
+    workload_details = run_context.get('workload_details') or {}
+    if network_tag is not None:
+        context_lines.append(f' Network tag: {network_tag}\n')
+    if workload_tag is not None:
+        context_lines.append(f' Workload tag: {workload_tag}\n')
+    if rate_type is not None:
+        context_lines.append(f' Rate type: {rate_type}\n')
+
+    percentages_raw = workload_details.get('percentages_raw')
+    if percentages_raw is None:
+        percentages_raw = run_context.get('percentages')
+    if percentages_raw is not None:
+        context_lines.append(f' Workload percentages: {percentages_raw}\n')
+
+    normalized = workload_details.get('percentages_normalized')
+    if normalized is not None:
+        context_lines.append(
+            ' Workload normalized shares: '
+            + _format_number_list(normalized, decimals=2, as_percent=True)
+            + '\n'
+        )
+
+    zipf_s = workload_details.get('zipf_s')
+    if zipf_s is not None:
+        context_lines.append(f' Workload skew s: {zipf_s}\n')
+
+    extreme_x = workload_details.get('extreme_x')
+    if extreme_x is None:
+        extreme_x = run_context.get('extreme_x')
+    if extreme_x is not None:
+        context_lines.append(f' Workload extreme_x: {extreme_x}\n')
+
+    node_rates = workload_details.get('node_rates')
+    if node_rates is not None:
+        context_lines.append(f' Workload node rates (tx/s): {node_rates}\n')
+
+    worker_rates = workload_details.get('worker_rates')
+    if worker_rates is not None:
+        context_lines.append(f' Workload worker/client rates (tx/s): {worker_rates}\n')
+
+    if not context_lines:
+        return summary_text
+
+    return summary_text.replace(
+        config_marker,
+        config_marker + ''.join(context_lines),
+        1,
+    )
+
+
 def run_fab_command(task='cloudlab_remote', debug=False, env=None):
     fab_cmd = ['fab', task]
     if debug:
@@ -149,7 +300,7 @@ def download_logs_if_needed(settings_file='cloudlab_settings.json', max_workers=
         return False
 
 
-def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None):
+def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None, settings_file='cloudlab_settings.json'):
     logs_dir = logs_dir or PathMaker.logs_path()
 
     if not os.path.exists(logs_dir):
@@ -162,7 +313,14 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None):
 
     try:
         parser = LogParser.process(logs_dir, faults=faults)
-        result = parser.result()
+        origin_artifacts = _prepare_origin_mapping_artifacts(run_context, settings_file=settings_file)
+        parser.origin_mapping = origin_artifacts['entries']
+        if parser.origin_mapping:
+            parser.origin_mapping_note = (
+                'Origin map saved in this experiment directory as committee/settings '
+                'snapshots plus an origin_mapping JSON file.'
+            )
+        result = _annotate_summary_with_run_context(parser.result(), run_context)
         print(result)
 
         if save_to_file:
@@ -187,7 +345,13 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None):
         return False
 
 
-def generate_round_end_time_pivot(run_context, num_nodes=10, experiment_group=None, logs_dir=None):
+def generate_round_end_time_pivot(
+    run_context,
+    num_nodes=10,
+    experiment_group=None,
+    logs_dir=None,
+    settings_file='cloudlab_settings.json',
+):
     if not TIME_STORAGE_AVAILABLE:
         Print.warn('time_storage_from_logs module not available, skipping CSV generation')
         return False
@@ -202,6 +366,7 @@ def generate_round_end_time_pivot(run_context, num_nodes=10, experiment_group=No
 
     try:
         _ensure_experiment_dir(run_context)
+        origin_artifacts = _prepare_origin_mapping_artifacts(run_context, settings_file=settings_file)
 
         if csv_filename.exists():
             csv_filename.unlink()
@@ -210,7 +375,13 @@ def generate_round_end_time_pivot(run_context, num_nodes=10, experiment_group=No
         Print.info('')
 
         for node_id in range(num_nodes):
-            process_node_log(node_id, str(csv_filename), num_nodes, logs_dir=logs_dir)
+            process_node_log(
+                node_id,
+                str(csv_filename),
+                num_nodes,
+                logs_dir=logs_dir,
+                origin_mapping=origin_artifacts['entries'],
+            )
 
         Print.info('=' * 60)
         Print.info(f'Analysis complete! Results saved to: {csv_filename}')
@@ -298,6 +469,7 @@ def main():
             faults=args.faults,
             save_to_file=True,
             logs_dir=args.logs_dir,
+            settings_file=args.settings,
         ) and success
     else:
         success = process_logs(
@@ -305,6 +477,7 @@ def main():
             faults=args.faults,
             save_to_file=False,
             logs_dir=args.logs_dir,
+            settings_file=args.settings,
         ) and success
 
     if not args.no_pivot:
@@ -315,6 +488,7 @@ def main():
                     num_nodes=args.num_nodes,
                     experiment_group=exp_group,
                     logs_dir=args.logs_dir,
+                    settings_file=args.settings,
                 )
                 success = exp_success and success
         else:
@@ -322,6 +496,7 @@ def main():
                 run_context,
                 num_nodes=args.num_nodes,
                 logs_dir=args.logs_dir,
+                settings_file=args.settings,
             )
             success = pivot_success and success
 

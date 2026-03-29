@@ -80,6 +80,8 @@ class LogParser:
 
         self.vertex_stats = {}
         self.warmup_start = min(self.start) if self.start else None
+        self.origin_mapping = []
+        self.origin_mapping_note = ''
 
     def _merge_results(self, input):
         # Keep the earliest timestamp.
@@ -287,6 +289,28 @@ class LogParser:
 
         return ''.join(lines)
 
+    def _origin_mapping_summary(self):
+        if not self.origin_mapping:
+            return ''
+
+        lines = [
+            '\n',
+            ' + CERTIFICATE ORIGIN MAP:\n',
+        ]
+        if self.origin_mapping_note:
+            lines.append(f' {self.origin_mapping_note}\n')
+
+        for entry in self.origin_mapping:
+            lines.append(
+                f'  node{entry["node_id"]}: '
+                f'ip={entry["ip"]}, '
+                f'region={entry["region"] or "unknown"}, '
+                f'key_short={entry["short_public_key"]}, '
+                f'key_full={entry["full_public_key"]}\n'
+            )
+
+        return ''.join(lines)
+
     def _consensus_throughput(self):
         if not self.commits or not self.proposals:
             return 0, 0, 0
@@ -342,6 +366,7 @@ class LogParser:
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
         vertex_stats_block = self._vertex_stats_summary()
+        origin_mapping_block = self._origin_mapping_summary()
 
         return (
             '\n'
@@ -375,6 +400,7 @@ class LogParser:
             + f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             + f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             + vertex_stats_block
+            + origin_mapping_block
             + '-----------------------------------------\n'
         )
 
