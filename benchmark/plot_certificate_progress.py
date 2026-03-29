@@ -34,13 +34,13 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # )
 
 CSV_PATH = (
-    "results/geo/custom_1_20/"
-    "20260328_110819_n10_r100000_run1/"
-    "geo_custom_1_20_round_certificate_analysis.csv"
+    "results/geo/custom_1_25_30/"
+    "20260329_052926_n10_r100000_run1/"
+    "geo_custom_1_25_30_round_certificate_analysis.csv"
 )
 
-NODE_ID = 0
-START_ROUND = 62
+NODE_ID = 1
+START_ROUND = 59
 END_ROUND = 63
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
@@ -112,6 +112,24 @@ def _sorted_certificate_values(row, cert_columns):
     return sorted(values)
 
 
+def _prepare_rows_for_plotting(rows, cert_columns):
+    prepared = []
+    for row in rows:
+        round_value = _to_int(row.get("Round"))
+        if round_value is None:
+            continue
+        prepared.append((round_value, _sorted_certificate_values(row, cert_columns)))
+    prepared.sort(key=lambda item: item[0])
+    return prepared
+
+
+def _completed_rows(rows):
+    return [
+        row for row in rows
+        if _to_float(row.get("Round_End_Time_ms")) is not None
+    ]
+
+
 def filter_certificate_rows(rows, node_id, start_round, end_round):
     filtered = []
     for row in rows:
@@ -148,14 +166,19 @@ def _all_rounds_label():
 
 
 def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_round, output_path):
-    sorted_rows = [_sorted_certificate_values(row, cert_columns) for row in rows]
+    prepared_rows = _prepare_rows_for_plotting(_completed_rows(rows), cert_columns)
     averages = []
     progress = []
 
-    for index in range(len(cert_columns)):
-        values = [values[index] for values in sorted_rows if len(values) > index]
-        if not values:
-            continue
+    if not prepared_rows:
+        raise ValueError("No completed rounds available in the selected range.")
+
+    common_rank_count = min(len(values) for _, values in prepared_rows)
+    if common_rank_count == 0:
+        raise ValueError("No certificate latency values available in the selected range.")
+
+    for index in range(common_rank_count):
+        values = [values[index] for _, values in prepared_rows]
         averages.append(sum(values) / len(values))
         progress.append(index + 1)
 
@@ -177,8 +200,9 @@ def plot_progress_vs_avg_latency(rows, cert_columns, node_id, start_round, end_r
 
 
 def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_round=None, end_round=None):
-    rounds = [_to_int(row["Round"]) for row in rows]
-    sorted_rows = [_sorted_certificate_values(row, cert_columns) for row in rows]
+    prepared_rows = _prepare_rows_for_plotting(rows, cert_columns)
+    rounds = [round_value for round_value, _ in prepared_rows]
+    sorted_rows = [values for _, values in prepared_rows]
 
     fig, ax = plt.subplots(figsize=(11, 6))
     cmap = plt.get_cmap("tab10")

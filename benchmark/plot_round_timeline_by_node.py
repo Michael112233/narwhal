@@ -33,14 +33,14 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # ============================================================================
 CSV_PATH = (
     "results/geo/custom_1_25_30/"
-    "20260329_024606_n10_r40000_run1/"
+    "20260329_040148_n10_r60000_run1/"
     "geo_custom_1_25_30_round_certificate_analysis.csv"
 )
 
 # If ROUND_LIST is not None, it takes priority over START_ROUND / END_ROUND.
 ROUND_LIST = None
-START_ROUND = 70
-END_ROUND = 80
+START_ROUND = 58
+END_ROUND = 96
 
 # When None, include every node present in the CSV.
 NODE_IDS = None
