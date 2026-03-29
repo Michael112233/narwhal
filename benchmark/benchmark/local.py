@@ -174,13 +174,21 @@ class LocalBench:
             elif rate_type == 'custom':
                 # Custom workload: allocate based on specified percentages
                 percentages = getattr(self.bench_parameters, 'percentages', None)
+                extra_rate = getattr(self.bench_parameters, 'extra_rate', None)
                 if percentages is None:
                     raise BenchError('rate_type=custom requires bench parameter "percentages"', ConfigError('missing percentages'))
+                if extra_rate is None:
+                    raise BenchError('rate_type=custom requires bench parameter "extra_rate"', ConfigError('missing extra_rate'))
                 try:
-                    node_rates = CustomAllocator(rate, num_nodes, percentages).allocate()
+                    allocator = CustomAllocator(rate, extra_rate, num_nodes, percentages)
+                    node_rates = allocator.allocate()
                 except Exception as e:
                     raise BenchError('Failed to allocate custom node rates', e)
-                print(f'Node rates (Custom percentages={percentages}): {node_rates}')
+                print(
+                    f'Node rates (Custom base_total={allocator.base_total_tps}, '
+                    f'extra_total={allocator.extra_tps}, percentages={percentages}): '
+                    f'{node_rates}'
+                )
                 for i, addresses in enumerate(workers_addresses):
                     node_rate = node_rates[i]
                     for (id, address) in addresses:

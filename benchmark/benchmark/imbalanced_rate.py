@@ -301,49 +301,69 @@ class ExtremeXAllocator:
 
 
 class CustomAllocator:
-    def __init__(self, total_tps: int, nodes: int, percentages: list[float]) -> None:
+    def __init__(
+        self,
+        base_total_tps: int,
+        extra_tps: int,
+        nodes: int,
+        percentages: list[float],
+    ) -> None:
         """
-        Custom workload allocator: allocate TPS based on specified percentages
+        Custom workload allocator:
+        - the base total TPS is split evenly across all nodes
+        - the extra TPS is allocated according to the specified percentages
         
-        :param total_tps: 总 TPS (例如 60000)
+        :param base_total_tps: 基础总 TPS，先均分到所有节点
+        :param extra_tps: 额外总 TPS，按 percentages 分配
         :param nodes: 节点数 (例如 10)
-        :param percentages: 每个节点的百分比列表 (例如 [0.3, 0.25, 0.2, 0.15, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0])
+        :param percentages: 每个节点的权重列表
         """
-        if total_tps <= 0 or nodes <= 0:
-            raise ValueError("total_tps and nodes must be > 0")
+        if base_total_tps < 0 or extra_tps < 0 or nodes <= 0:
+            raise ValueError("base_total_tps and extra_tps must be >= 0, nodes must be > 0")
         if len(percentages) != nodes:
             raise ValueError(f"percentages list must have exactly {nodes} elements")
         if any(p < 0 for p in percentages):
             raise ValueError("all percentages must be >= 0")
 
-        # Normalize比例：不再严格要求 sum == 1
         total_percent = sum(percentages)
         if total_percent <= 0:
             raise ValueError("sum of percentages must be > 0")
 
         normalized = [p / total_percent for p in percentages]
 
-        self.total_tps = total_tps
+        base_share = base_total_tps // nodes
+        base_remainder = base_total_tps % nodes
+        base_node_rates = [base_share] * nodes
+        for i in range(base_remainder):
+            base_node_rates[i] += 1
+
+        raw_extra_rates = [extra_tps * p for p in normalized]
+        extra_node_rates = [int(rate) for rate in raw_extra_rates]
+        extra_remainder = extra_tps - sum(extra_node_rates)
+        if extra_remainder > 0:
+            fractions = [(rate - int(rate)) for rate in raw_extra_rates]
+            adjust_indices = sorted(
+                range(nodes),
+                key=lambda index: fractions[index],
+                reverse=True,
+            )
+            for i in range(extra_remainder):
+                extra_node_rates[adjust_indices[i]] += 1
+
+        self.base_total_tps = base_total_tps
+        self.extra_tps = extra_tps
+        self.total_tps = base_total_tps + extra_tps
         self.nodes = nodes
         self.percentages = normalized
+        self.base_node_rates = base_node_rates
+        self.extra_node_rates = extra_node_rates
 
     def allocate(self) -> list[int]:
         """
-        按照指定的百分比分配 TPS。
-        结果确保总和严格等于 total_tps
+        返回最终每个节点的 TPS:
+        base_node_rates + extra_node_rates
         """
-        # 计算每个节点的理论 TPS
-        raw_rates = [self.total_tps * p for p in self.percentages]
-        
-        # 转换为整数
-        alloc = [int(r) for r in raw_rates]
-        remainder = self.total_tps - sum(alloc)
-        
-        if remainder > 0:
-            # 按照小数部分从大到小排序，补齐缺失的 TPS
-            fractions = [(r - int(r)) for r in raw_rates]
-            adjust_indices = sorted(range(self.nodes), key=lambda k: fractions[k], reverse=True)
-            for i in range(remainder):
-                alloc[adjust_indices[i]] += 1
-                
-        return alloc
+        return [
+            base_rate + extra_rate
+            for base_rate, extra_rate in zip(self.base_node_rates, self.extra_node_rates)
+        ]

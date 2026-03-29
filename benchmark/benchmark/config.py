@@ -215,6 +215,7 @@ class BenchParameters:
 
             # Optional parameters for specific rate types
             self.extreme_x = int(json['extreme_x']) if 'extreme_x' in json else None
+            self.extra_rate = int(json['extra_rate']) if 'extra_rate' in json else None
             self.percentages = json['percentages'] if 'percentages' in json else None
 
             self.workers = int(json['workers'])

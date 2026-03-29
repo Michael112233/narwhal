@@ -216,6 +216,24 @@ def _annotate_summary_with_run_context(summary_text, run_context):
     if percentages_raw is not None:
         context_lines.append(f' Workload percentages: {percentages_raw}\n')
 
+    base_total_rate = workload_details.get('base_total_rate')
+    if base_total_rate is None:
+        base_total_rate = run_context.get('rate')
+    if base_total_rate is not None:
+        context_lines.append(f' Workload base total rate: {base_total_rate} tx/s\n')
+
+    extra_rate_total = workload_details.get('extra_rate_total')
+    if extra_rate_total is None:
+        extra_rate_total = run_context.get('extra_rate')
+    if extra_rate_total is not None:
+        context_lines.append(
+            f' Workload extra rate total: {extra_rate_total} tx/s\n'
+        )
+
+    effective_total_rate = workload_details.get('effective_total_rate')
+    if effective_total_rate is not None:
+        context_lines.append(f' Workload effective total rate: {effective_total_rate} tx/s\n')
+
     normalized = workload_details.get('percentages_normalized')
     if normalized is not None:
         context_lines.append(
@@ -237,6 +255,16 @@ def _annotate_summary_with_run_context(summary_text, run_context):
     node_rates = workload_details.get('node_rates')
     if node_rates is not None:
         context_lines.append(f' Workload node rates (tx/s): {node_rates}\n')
+
+    base_node_rates = workload_details.get('base_node_rates')
+    if base_node_rates is not None:
+        context_lines.append(f' Workload base node rates (tx/s): {base_node_rates}\n')
+
+    percentage_node_rates = workload_details.get('percentage_node_rates')
+    if percentage_node_rates is not None:
+        context_lines.append(
+            f' Workload percentage node rates (tx/s): {percentage_node_rates}\n'
+        )
 
     worker_rates = workload_details.get('worker_rates')
     if worker_rates is not None:

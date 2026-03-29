@@ -4,10 +4,12 @@ Preview the per-node workload distribution produced by CustomAllocator.
 
 This uses the same allocation logic as the benchmark runner, so the output
 matches what `fab local` / `fab cloudlab-remote` will use for `rate_type=custom`.
+The base total `rate` is first split evenly across all nodes, then `extra_rate`
+is distributed according to `percentages`.
 
 Examples:
     python3 preview_custom_workload.py
-    python3 preview_custom_workload.py --rate 40000 --percentages 1,1,1,1,8,8,8,1,1,1
+    python3 preview_custom_workload.py --rate 40000 --extra-rate 20000 --percentages 1,1,1,1,8,8,8,1,1,1
 """
 
 import argparse
@@ -17,8 +19,9 @@ from benchmark.imbalanced_rate import CustomAllocator
 
 
 # Edit these defaults directly if you prefer not to use command-line flags.
-DEFAULT_TOTAL_RATE = 60000
-DEFAULT_PERCENTAGES = "1,1,15,15,20,20,20,20,20,20"
+DEFAULT_TOTAL_RATE = 40000
+DEFAULT_EXTRA_RATE = 40000
+DEFAULT_PERCENTAGES = "1,1,1,1,5,6,6,6,6,6"
 
 
 def parse_percentages(raw: str) -> List[float]:
@@ -40,30 +43,44 @@ def parse_percentages(raw: str) -> List[float]:
     return values
 
 
-def preview_distribution(total_rate: int, percentages: List[float]):
-    allocator = CustomAllocator(total_rate, len(percentages), percentages)
+def preview_distribution(total_rate: int, extra_rate: int, percentages: List[float]):
+    allocator = CustomAllocator(
+        total_rate,
+        extra_rate,
+        len(percentages),
+        percentages,
+    )
     node_rates = allocator.allocate()
     normalized = allocator.percentages
 
     print("")
     print("Custom workload preview")
     print("-" * 72)
-    print(f"Total input rate: {total_rate:,} tx/s")
+    print(f"Base total rate: {total_rate:,} tx/s")
+    print(f"Extra rate total: {extra_rate:,} tx/s")
+    print(f"Effective total rate: {allocator.total_tps:,} tx/s")
     print(f"Node count: {len(percentages)}")
     print(f"Raw percentages: {percentages}")
     print(f"Normalized shares: {[round(share * 100, 2) for share in normalized]} %")
     print("-" * 72)
     print(
-        f"{'Node':<8}{'Weight':>12}{'Share %':>12}{'Rate (tx/s)':>16}  Distribution"
+        f"{'Node':<8}{'Weight':>12}{'Share %':>12}{'Base':>10}{'Extra':>10}{'Final':>12}  Distribution"
     )
     print("-" * 72)
 
-    for node_id, (weight, share, rate) in enumerate(
-        zip(percentages, normalized, node_rates)
+    for node_id, (weight, share, base_rate, extra_share, rate) in enumerate(
+        zip(
+            percentages,
+            normalized,
+            allocator.base_node_rates,
+            allocator.extra_node_rates,
+            node_rates,
+        )
     ):
         bar = "#" * max(1, int(round(share * 50)))
         print(
-            f"{node_id:<8}{weight:>12.2f}{share * 100:>12.2f}{rate:>16,}  {bar}"
+            f"{node_id:<8}{weight:>12.2f}{share * 100:>12.2f}"
+            f"{base_rate:>10,}{extra_share:>10,}{rate:>12,}  {bar}"
         )
 
     print("-" * 72)
@@ -79,7 +96,13 @@ def build_parser():
         "--rate",
         type=int,
         default=DEFAULT_TOTAL_RATE,
-        help=f"Total input rate in tx/s (default: {DEFAULT_TOTAL_RATE})",
+        help=f"Base total input rate in tx/s (default: {DEFAULT_TOTAL_RATE})",
+    )
+    parser.add_argument(
+        "--extra-rate",
+        type=int,
+        default=DEFAULT_EXTRA_RATE,
+        help=f"Extra total rate distributed by percentages (default: {DEFAULT_EXTRA_RATE})",
     )
     parser.add_argument(
         "--percentages",
@@ -96,7 +119,7 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    preview_distribution(args.rate, args.percentages)
+    preview_distribution(args.rate, args.extra_rate, args.percentages)
 
 
 if __name__ == "__main__":
