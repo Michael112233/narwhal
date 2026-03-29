@@ -41,11 +41,11 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 
 
 
-CSV_PATH = (
-    "results/geo/balanced/"
-    "20260329_065217_n10_r40000_run1/"
-    "geo_balanced_round_certificate_analysis.csv"
-)
+# CSV_PATH = (
+#     "results/geo/balanced/"
+#     "20260329_065217_n10_r40000_run1/"
+#     "geo_balanced_round_certificate_analysis.csv"
+# )
 
 # CSV_PATH = (
 #     "results/geo/custom_1_15_20/"
@@ -53,11 +53,16 @@ CSV_PATH = (
 #     "geo_custom_1_15_20_round_certificate_analysis.csv"
 # )
 
+CSV_PATH = (
+    "results/geo/custom4000_1_5_6/"
+    "20260329_093757_n10_r20000_run1/"
+    "geo_custom4000_1_5_6_round_certificate_analysis.csv"
+)
 
 
-NODE_ID = 0
-START_ROUND = 100
-END_ROUND = 130
+NODE_ID = 9
+START_ROUND = 62
+END_ROUND = 66
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
 
@@ -253,7 +258,7 @@ def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_rou
     )
     ax.set_xlabel("Round")
     ax.set_ylabel("Time Delta (ms)")
-    ax.set_ylim(0, 1000)
+    ax.set_ylim(0, 5000)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(title="Arrival Order", ncol=2)
     fig.tight_layout()

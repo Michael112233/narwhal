@@ -31,12 +31,18 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # ============================================================================
 # Configuration: edit these values directly when you want a different plot.
 # ============================================================================
-CSV_PATH = (
-    "results/geo/custom_1_25_30/"
-    "20260329_040148_n10_r80000_run2/"
-    "geo_custom_1_25_30_round_certificate_analysis.csv"
-)
+# CSV_PATH = (
+#     "results/geo/custom_1_25_30/"
+#     "20260329_040148_n10_r80000_run2/"
+#     "geo_custom_1_25_30_round_certificate_analysis.csv"
+# )
 
+
+CSV_PATH = (
+    "results/geo/custom4000_1_5_6/"
+    "20260329_093757_n10_r20000_run1/"
+    "geo_custom4000_1_5_6_round_certificate_analysis.csv"
+)
 
 START_ROUND = 61
 END_ROUND = 64
