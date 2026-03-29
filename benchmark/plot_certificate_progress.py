@@ -34,14 +34,14 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # )
 
 CSV_PATH = (
-    "results/geo/custom_1_25_30/"
-    "20260329_052926_n10_r100000_run1/"
-    "geo_custom_1_25_30_round_certificate_analysis.csv"
+    "results/geo/balanced/"
+    "20260329_065217_n10_r20000_run1/"
+    "geo_balanced_round_certificate_analysis.csv"
 )
 
-NODE_ID = 1
-START_ROUND = 59
-END_ROUND = 63
+NODE_ID = 0
+START_ROUND = 58
+END_ROUND = 1032
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
 
