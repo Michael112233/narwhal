@@ -39,11 +39,11 @@ CSV_PATH = (
 
 # If ROUND_LIST is not None, it takes priority over START_ROUND / END_ROUND.
 ROUND_LIST = None
-START_ROUND = 800
-END_ROUND = 804
+START_ROUND = 700
+END_ROUND = 705
 
 # When None, include every node present in the CSV.
-NODE_IDS = None
+NODE_IDS = [9]
 
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
