@@ -45,10 +45,11 @@ WINDOW_STEP = 1
 TOP_K = 10
 
 MIN_VALID_RATIO = 0.90
-MAX_CERT_LOW_CV = 0.35
-MAX_CERT_HIGH_CV = 0.35
-MAX_GAP_CV = 0.45
-MAX_GAP_DRIFT_RATIO = 0.30
+MAX_CERT_LOW_MAX_JUMP_MS = 250.0
+MAX_CERT_HIGH_MAX_JUMP_MS = 250.0
+MAX_GAP_MAX_JUMP_MS = 120.0
+MAX_GAP_P95_JUMP_MS = 80.0
+MAX_GAP_DRIFT_RATIO = 0.20
 
 OUTPUT_DIR = None
 
@@ -168,6 +169,30 @@ def _drift_ratio(values):
     return abs(second_mean - first_mean) / denominator
 
 
+def _adjacent_jump_stats(values):
+    if len(values) < 2:
+        return {
+            "max_jump_abs": 0.0,
+            "max_jump_ratio": 0.0,
+            "p95_jump_abs": 0.0,
+            "p95_jump_ratio": 0.0,
+        }
+
+    diffs = [abs(values[index] - values[index - 1]) for index in range(1, len(values))]
+    base = max(abs(mean(values)), 1e-12)
+    diff_ratios = [diff / base for diff in diffs]
+    ordered_diffs = sorted(diffs)
+    ordered_ratios = sorted(diff_ratios)
+    p95_index = min(len(ordered_diffs) - 1, math.ceil(len(ordered_diffs) * 0.95) - 1)
+
+    return {
+        "max_jump_abs": max(diffs),
+        "max_jump_ratio": max(diff_ratios),
+        "p95_jump_abs": ordered_diffs[p95_index],
+        "p95_jump_ratio": ordered_ratios[p95_index],
+    }
+
+
 def _build_round_metric(row, cert_columns, low_rank, high_rank):
     sorted_values = _sorted_certificate_values(row, cert_columns)
     if len(sorted_values) < high_rank:
@@ -229,12 +254,16 @@ def _window_metrics(node_id, window_rows, cert_columns, low_rank, high_rank):
     cert_high_cv = _cv(high_values)
     gap_cv = _cv(gap_values)
     gap_drift = _drift_ratio(gap_values)
+    cert_low_jump = _adjacent_jump_stats(low_values)
+    cert_high_jump = _adjacent_jump_stats(high_values)
+    gap_jump = _adjacent_jump_stats(gap_values)
 
     steady_state = (
         valid_ratio >= MIN_VALID_RATIO
-        and cert_low_cv <= MAX_CERT_LOW_CV
-        and cert_high_cv <= MAX_CERT_HIGH_CV
-        and gap_cv <= MAX_GAP_CV
+        and cert_low_jump["max_jump_abs"] <= MAX_CERT_LOW_MAX_JUMP_MS
+        and cert_high_jump["max_jump_abs"] <= MAX_CERT_HIGH_MAX_JUMP_MS
+        and gap_jump["max_jump_abs"] <= MAX_GAP_MAX_JUMP_MS
+        and gap_jump["p95_jump_abs"] <= MAX_GAP_P95_JUMP_MS
         and gap_drift <= MAX_GAP_DRIFT_RATIO
     )
 
@@ -257,6 +286,14 @@ def _window_metrics(node_id, window_rows, cert_columns, low_rank, high_rank):
         "cert_low_cv": cert_low_cv,
         "cert_high_cv": cert_high_cv,
         "gap_cv": gap_cv,
+        "cert_low_max_jump_ms": cert_low_jump["max_jump_abs"],
+        "cert_low_max_jump_ratio": cert_low_jump["max_jump_ratio"],
+        "cert_high_max_jump_ms": cert_high_jump["max_jump_abs"],
+        "cert_high_max_jump_ratio": cert_high_jump["max_jump_ratio"],
+        "gap_max_jump_ms": gap_jump["max_jump_abs"],
+        "gap_max_jump_ratio": gap_jump["max_jump_ratio"],
+        "gap_p95_jump_ms": gap_jump["p95_jump_abs"],
+        "gap_p95_jump_ratio": gap_jump["p95_jump_ratio"],
         "gap_drift_ratio": gap_drift,
         "round_end_mean_ms": mean(round_end_values) if round_end_values else None,
         "first_valid_round": min(item["round"] for item in valid_metrics),
@@ -289,7 +326,7 @@ def _rank_windows(windows):
         key=lambda item: (
             0 if item["steady_state"] else 1,
             -(item["gap_mean_ms"] or -1e18),
-            item["gap_cv"] if item["gap_cv"] is not None else math.inf,
+            item["gap_max_jump_ratio"] if item["gap_max_jump_ratio"] is not None else math.inf,
             item["start_round"],
         ),
     )
@@ -323,6 +360,14 @@ def _write_windows_csv(output_path, windows):
         "cert_low_cv",
         "cert_high_cv",
         "gap_cv",
+        "cert_low_max_jump_ms",
+        "cert_low_max_jump_ratio",
+        "cert_high_max_jump_ms",
+        "cert_high_max_jump_ratio",
+        "gap_max_jump_ms",
+        "gap_max_jump_ratio",
+        "gap_p95_jump_ms",
+        "gap_p95_jump_ratio",
         "gap_drift_ratio",
         "round_end_mean_ms",
     ]
@@ -351,11 +396,13 @@ def _build_report_text(
         (
             "Steady-state thresholds: "
             f"valid_ratio>={MIN_VALID_RATIO:.2f}, "
-            f"cert{low_rank}_cv<={MAX_CERT_LOW_CV:.2f}, "
-            f"cert{high_rank}_cv<={MAX_CERT_HIGH_CV:.2f}, "
-            f"gap_cv<={MAX_GAP_CV:.2f}, "
+            f"cert{low_rank}_max_jump<={MAX_CERT_LOW_MAX_JUMP_MS:.0f} ms, "
+            f"cert{high_rank}_max_jump<={MAX_CERT_HIGH_MAX_JUMP_MS:.0f} ms, "
+            f"gap_max_jump<={MAX_GAP_MAX_JUMP_MS:.0f} ms, "
+            f"gap_p95_jump<={MAX_GAP_P95_JUMP_MS:.0f} ms, "
             f"gap_drift<={MAX_GAP_DRIFT_RATIO:.2f}"
         ),
+        "Interpretation: a steady-state window should not contain sudden per-round jumps.",
         "",
     ]
 
@@ -377,7 +424,8 @@ def _build_report_text(
                 ),
                 (
                     f"valid_ratio={_format_metric(best['valid_ratio'])}, "
-                    f"gap_cv={_format_metric(best['gap_cv'])}, "
+                    f"gap_max_jump={_format_metric(best['gap_max_jump_ms'])} ms, "
+                    f"gap_p95_jump={_format_metric(best['gap_p95_jump_ms'])} ms, "
                     f"gap_drift={_format_metric(best['gap_drift_ratio'])}"
                 ),
                 "",
@@ -393,7 +441,7 @@ def _build_report_text(
                     f"gap_mean={_format_metric(item['gap_mean_ms'])} ms | "
                     f"cert{low_rank}={_format_metric(item['cert_low_mean_ms'])} ms | "
                     f"cert{high_rank}={_format_metric(item['cert_high_mean_ms'])} ms | "
-                    f"gap_cv={_format_metric(item['gap_cv'])}"
+                    f"gap_max_jump={_format_metric(item['gap_max_jump_ms'])} ms"
                 )
             )
         lines.append("")
@@ -412,7 +460,8 @@ def _build_report_text(
                     f"{index}. node {item['node_id']} | rounds {item['start_round']}-{item['end_round']} | "
                     f"steady={item['steady_state']} | "
                     f"gap_mean={_format_metric(item['gap_mean_ms'])} ms | "
-                    f"gap_cv={_format_metric(item['gap_cv'])} | "
+                    f"gap_max_jump={_format_metric(item['gap_max_jump_ms'])} ms | "
+                    f"gap_p95_jump={_format_metric(item['gap_p95_jump_ms'])} ms | "
                     f"gap_drift={_format_metric(item['gap_drift_ratio'])}"
                 )
             )
@@ -435,7 +484,7 @@ def _build_report_text(
                 f"gap_mean={_format_metric(item['gap_mean_ms'])} ms | "
                 f"cert{low_rank}={_format_metric(item['cert_low_mean_ms'])} ms | "
                 f"cert{high_rank}={_format_metric(item['cert_high_mean_ms'])} ms | "
-                f"gap_cv={_format_metric(item['gap_cv'])}"
+                f"gap_max_jump={_format_metric(item['gap_max_jump_ms'])} ms"
             )
         )
 

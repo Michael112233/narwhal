@@ -76,7 +76,7 @@ def _cloudlab_bench_params():
         # 'rate_type': 'imbalanced',
         'rate_type': 'custom',
         'percentages': [1, 1, 1, 1, 25, 25, 30, 30, 30, 30],
-        'rate': [40000,60000],
+        'rate': [40000,60000,80000,100000,120000,140000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,

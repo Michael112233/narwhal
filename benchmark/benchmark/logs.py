@@ -252,7 +252,7 @@ class LogParser:
             f'{self._format_distribution(non_empty_serialized_sizes)}\n',
             f' Inlined workload bytes (non-empty only): '
             f'{self._format_distribution(non_empty_workload_sizes)}\n',
-            ' Per-node comparison (non-empty vertices only):\n',
+            ' Per-node comparison (size stats use non-empty vertices only):\n',
         ]
 
         for source, rows in sorted(self.vertex_stats.items()):
@@ -261,13 +261,13 @@ class LogParser:
                 (len(non_empty_rows) / len(rows) * 100)
                 if rows else 0
             )
+            first_observed_round = min(row['round'] for row in rows) if rows else None
+            last_observed_round = max(row['round'] for row in rows) if rows else None
 
             if non_empty_rows:
                 node_sizes = [row['size'] for row in non_empty_rows]
                 node_workloads = [row['workload'] for row in non_empty_rows]
                 node_entries = [row['entries'] for row in non_empty_rows]
-                first_non_empty_round = min(row['round'] for row in non_empty_rows)
-                last_non_empty_round = max(row['round'] for row in non_empty_rows)
                 lines.append(
                     f'  {source}: non_empty={len(non_empty_rows):,}/{len(rows):,} '
                     f'({non_empty_ratio:.1f}%), '
@@ -277,14 +277,14 @@ class LogParser:
                     f'max_size={max(node_sizes):,} B, '
                     f'avg_workload={round(mean(node_workloads)):,} B, '
                     f'avg_entries={round(mean(node_entries)):,}, '
-                    f'active_rounds={first_non_empty_round}-{last_non_empty_round}\n'
+                    f'active_rounds={first_observed_round}-{last_observed_round}\n'
                 )
             else:
                 lines.append(
                     f'  {source}: non_empty=0/{len(rows):,} (0.0%), '
                     'avg_size=0 B, p50_size=0 B, p90_size=0 B, '
                     'max_size=0 B, avg_workload=0 B, avg_entries=0, '
-                    'active_rounds=none\n'
+                    f'active_rounds={first_observed_round}-{last_observed_round}\n'
                 )
 
         return ''.join(lines)

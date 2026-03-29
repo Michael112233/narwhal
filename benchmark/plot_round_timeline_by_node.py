@@ -32,18 +32,18 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # Configuration: edit these values directly when you want a different plot.
 # ============================================================================
 CSV_PATH = (
-    "results/no_delay/custom5_5/"
-    "20260328_063819_n10_r40000_run2/"
-    "no_delay_custom5_5_round_certificate_analysis.csv"
+    "results/geo/custom_1_25_30/"
+    "20260329_024606_n10_r40000_run1/"
+    "geo_custom_1_25_30_round_certificate_analysis.csv"
 )
 
 # If ROUND_LIST is not None, it takes priority over START_ROUND / END_ROUND.
 ROUND_LIST = None
-START_ROUND = 700
-END_ROUND = 705
+START_ROUND = 70
+END_ROUND = 80
 
 # When None, include every node present in the CSV.
-NODE_IDS = [9]
+NODE_IDS = None
 
 # When None, figures are written next to the selected CSV.
 OUTPUT_DIR = None
