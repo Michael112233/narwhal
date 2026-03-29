@@ -17,8 +17,8 @@ from benchmark.imbalanced_rate import CustomAllocator
 
 
 # Edit these defaults directly if you prefer not to use command-line flags.
-DEFAULT_TOTAL_RATE = 40000
-DEFAULT_PERCENTAGES = "1,1,20,20,20,20,20,20,20,20"
+DEFAULT_TOTAL_RATE = 60000
+DEFAULT_PERCENTAGES = "1,1,15,15,20,20,20,20,20,20"
 
 
 def parse_percentages(raw: str) -> List[float]:
