@@ -1,8 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, ProposalParents};
+use crate::messages::{Header, ProposalParents};
 use crate::primary::Round;
 use config::{Committee, WorkerId};
-use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::debug;
 #[cfg(feature = "benchmark")]
@@ -49,7 +48,7 @@ pub struct Proposer {
     solid_step_length: u64,
     /// The solid wave length.
     solid_wave_length: u64,
-    /// Short grace period after parents become ready to absorb late certificates.
+    /// Short grace period after parents become ready to absorb late headers.
     parent_grace_delay: Duration,
 }
 
@@ -91,9 +90,9 @@ impl Proposer {
             .authorities
             .keys()
             .position(|authority| authority == &name);
-        let genesis = Certificate::genesis(committee)
+        let genesis = Header::genesis(committee)
             .iter()
-            .map(|x| x.digest())
+            .map(|x| x.id.clone())
             .collect();
         let solid_step_length = committee.solid_step_length() as u64;
         let solid_wave_length = committee.solid_wave_length() as u64;
@@ -402,7 +401,7 @@ impl Proposer {
 
         // Maintain solid_step / solid_wave metadata according to the intended semantics:
         // - round 1: vertices = parents, merged = parents
-        // - end rounds (r % len == 0): vertices = union(parent.merged), merged = {header}
+        // - init/end rounds (r % len == 0): vertices = union(parent.merged), merged = {header}
         // - all other rounds: vertices = merged = union(parent.merged)
         debug!("the number of the parents is {}", header.parents.len());
 
@@ -411,7 +410,7 @@ impl Proposer {
         let is_solid_wave_end_round =
             round == 1 || (round > 1 && round % self.solid_wave_length == 0);
         if round == 1 {
-            let parent_set: HashSet<Digest> = unlocked_round.parents.into_iter().collect();
+            let parent_set: HashSet<Digest> = unlocked_round.parents.iter().cloned().collect();
             header.store_solid_step_vertex(parent_set.clone());
             header.store_solid_step_merged_vertices(parent_set.clone());
             header.store_solid_wave_vertex(parent_set.clone());
@@ -426,7 +425,9 @@ impl Proposer {
             header.store_solid_step_vertex(unlocked_round.solid_step_union.clone());
             header.store_solid_step_merged_vertices(unlocked_round.solid_step_union);
         }
-        if is_solid_wave_end_round {
+        if round == 1 {
+            // Round 1 should keep the genesis parent set as the first wave basis.
+        } else if is_solid_wave_end_round {
             header.store_solid_wave_vertex(unlocked_round.solid_wave_union);
 
             let mut self_only: HashSet<Digest> = HashSet::new();
