@@ -29,7 +29,7 @@ except ImportError:
 
 
 @task
-def local(ctx, debug=False):
+def local(ctx, debug=True):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'faults': 0,
@@ -38,19 +38,19 @@ def local(ctx, debug=False):
         'rate_type': 'balanced',
         'rate': 80000,
         'tx_size': 512,
-        'duration': 20,
+        'duration': 120,
     }
     node_params = {
         'header_size': 1000,  # bytes
-        'max_header_delay': 200  # ms
+        'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
-        'sync_retry_delay': 1000,  # ms
+        'sync_retry_delay': 1000,  # ms 
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
-        'sigma': 2,
-        'kappa': 2,
-        'reference': 4,
+        'sigma': 1,
+        'kappa': 3,
+        'reference': 7,
         'coverage': 7,
         's': 0.99
     }
@@ -245,9 +245,9 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
         'workers': 1,
         'collocate': True,
         'rate_type': 'imbalanced',
-        'rate': [40000],
+        'rate': [80000],
         'tx_size': 512,
-        'duration': 20,
+        'duration': 120,
         'runs': 1,
     }
     node_params = {
