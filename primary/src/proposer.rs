@@ -20,11 +20,11 @@ pub struct Proposer {
     name: PublicKey,
     /// Service to sign headers.
     signature_service: SignatureService,
-    /// The size of the headers' payload.
+    /// Retained for configuration compatibility; only used to size internal buffers.
     header_size: usize,
-    /// Optional number of batches required to trigger a header.
+    /// Retained for configuration compatibility; eager coupled proposals do not gate on batch count.
     max_header_batches: Option<usize>,
-    /// The maximum delay to wait for batches' digests.
+    /// Once parents are ready, the maximum time to wait for payload before emitting an empty header.
     max_header_delay: u64,
 
     /// Receives the parents to include in the next header (along with their round number).
@@ -40,8 +40,6 @@ pub struct Proposer {
     last_parents: Vec<Digest>,
     /// Holds the batches waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId, Vec<u8>)>,
-    /// Keeps track of the size (in bytes) of inlined batches that we received so far.
-    payload_size: usize,
 }
 
 impl Proposer {
@@ -75,7 +73,6 @@ impl Proposer {
                 round: 1,
                 last_parents: genesis,
                 digests: Vec::with_capacity(2 * header_size),
-                payload_size: 0,
             }
             .run()
             .await;
@@ -143,32 +140,17 @@ impl Proposer {
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         debug!("Dag starting at round {}", self.round);
+        debug!(
+            "Coupled proposer config: header_size={}, max_header_batches={:?}, empty_header_delay_ms={}",
+            self.header_size,
+            self.max_header_batches,
+            self.max_header_delay
+        );
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
 
         loop {
-            // Check if we can propose a new header. We propose a new header when one of the following
-            // conditions is met:
-            // 1. We have a quorum of certificates from the previous round and enough batches' digests;
-            // 2. We have a quorum of certificates from the previous round and the specified maximum
-            // inter-header delay has passed.
-            let enough_parents = !self.last_parents.is_empty();
-            let enough_digests = match self.max_header_batches {
-                Some(max_header_batches) => self.digests.len() >= max_header_batches,
-                None => self.payload_size >= self.header_size,
-            };
-            let timer_expired = timer.is_elapsed();
-            if (timer_expired || enough_digests) && enough_parents {
-                // Make a new header.
-                self.make_header().await;
-                self.payload_size = 0;
-
-                // Reschedule the timer.
-                let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
-                timer.as_mut().reset(deadline);
-            }
-
             tokio::select! {
                 Some((parents, round)) = self.rx_core.recv() => {
                     if round < self.round {
@@ -179,18 +161,38 @@ impl Proposer {
                     self.round = round + 1;
                     debug!("Dag moved to round {}", self.round);
 
-                    // Signal that we have enough parent certificates to propose a new header.
+                    // As soon as the next round becomes available, immediately cut a non-empty
+                    // coupled header if payload is already buffered. Otherwise, start waiting
+                    // for a short empty-header timeout.
                     self.last_parents = parents;
+                    if self.digests.is_empty() {
+                        let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
+                        timer.as_mut().reset(deadline);
+                    } else {
+                        self.make_header().await;
+                    }
                 }
                 Some((digest, worker_id, batch)) = self.rx_workers.recv() => {
                     if self.digests.is_empty() {
                         debug!("Received first digest for round {}, digest: {:?}", self.round, digest);
                     }
-                    self.payload_size += batch.len();
                     self.digests.push((digest, worker_id, batch));
+
+                    // If parents are already ready, payload arriving during the empty-header
+                    // window should immediately become a non-empty coupled header.
+                    if !self.last_parents.is_empty() {
+                        self.make_header().await;
+                    }
                 }
                 () = &mut timer => {
-                    // Nothing to do.
+                    // Only emit an empty header when the current round is ready but no payload
+                    // has arrived before the empty-header timeout.
+                    if !self.last_parents.is_empty() && self.digests.is_empty() {
+                        self.make_header().await;
+                    }
+
+                    let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
+                    timer.as_mut().reset(deadline);
                 }
             }
         }

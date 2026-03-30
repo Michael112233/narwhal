@@ -76,9 +76,9 @@ def _cloudlab_bench_params():
         # 'rate_type': 'balanced',
         'rate_type': 'custom',
         # 'percentages': [1, 1, 1, 1, 25, 25, 30, 30, 30, 30],
-        'percentages': [0,0,10,10,10,10,10,10,10,10],
-        'rate': [20000, 40000, 60000],
-        'extra_rate': 35000,
+        'percentages': [0,0,0,0,10,10,10,1,1,1],
+        'rate': [10000,20000,30000,40000],
+        'extra_rate': 15000,
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
@@ -92,20 +92,22 @@ def _cloudlab_node_params():
     return {
         'header_size': 1000,  # bytes, used when max_header_batches is not set
         'max_header_batches': _fair_header_batches(),  # fair comparison mode
-        'max_header_delay': 20,  # ms
+        'max_header_delay': 3,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500000,  # bytes
-        'max_batch_delay': 10,  # ms
+        'max_batch_delay': 5,  # ms
         's':2.5
     }
+
+
 
 
 def _fair_header_batches():
     # Original Narwhal's default `header_size=1000` on digest-only headers is roughly
     # 31 digests per header (1000 B / 32 B digest ~= 31).
-    return 3
+    return 1
 
 
 
