@@ -77,7 +77,7 @@ def _cloudlab_bench_params():
         # 'rate_type': 'custom',
         # 'percentages': [1, 1, 1, 1, 25, 25, 30, 30, 30, 30],
         # 'percentages': [0,0,0,0,10,10,10,1,1,1],
-        'rate': [60000],
+        'rate': [40000,50000],
         # 'extra_rate': 15000,
         'tx_size': 512,
         'duration': 240,
