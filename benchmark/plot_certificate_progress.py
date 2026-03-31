@@ -2,9 +2,9 @@
 """
 Plot certificate collection progress from round_certificate_analysis CSV files.
 
-This script generates two figures:
-1. Progress vs. average latency
-2. Latency over rounds
+This script generates the progress-vs-average-latency figure for a selected
+CSV file. A separate helper script can batch-generate latency-over-rounds
+figures for balanced results.
 
 Edit the configuration block below instead of passing command-line arguments.
 """
@@ -26,40 +26,9 @@ CERT_TIME_PATTERN = re.compile(r"Certificate_(\d+)_Time_Delta_ms$")
 # ============================================================================
 # Configuration: edit these values directly when you want a different plot.
 # ============================================================================
-# Default to the current run's analysis CSV.
-# CSV_PATH = (
-#     "results/geo_uniform/imbalanced/"
-#     "20260328_051308_n10_r40000_run2/"
-#     "geo_uniform_imbalanced_round_certificate_analysis.csv"
-# )
-
-# CSV_PATH = (
-#     "results/geo/custom_1_25_30/"
-#     "20260329_040148_n10_r60000_run1/"
-#     "geo_custom_1_25_30_round_certificate_analysis.csv"
-# )
-
-
-
-CSV_PATH = (
-    "results/geo/balanced/"
-    "20260329_065217_n10_r20000_run1/"
-    "geo_balanced_round_certificate_analysis.csv"
-)
-
-# CSV_PATH = (
-#     "results/geo/custom_1_15_20/"
-#     "20260329_084730_n10_r40000_run1/"
-#     "geo_custom_1_15_20_round_certificate_analysis.csv"
-# )
-
-# CSV_PATH = (
-#     "results/geo/custom35000_0_10/"
-#     "20260329_100342_n10_r40000_run2/"
-#     "geo_custom35000_0_10_round_certificate_analysis.csv"
-# )
-
-
+# Set `CSV_PATH` to a single CSV. When left as None, the latest matching CSV
+# under `results/` is used.
+CSV_PATH = None
 NODE_ID = 0
 START_ROUND = 200
 END_ROUND = 800
@@ -119,6 +88,17 @@ def _resolve_csv_path(csv_path):
     return candidates[0]
 
 
+def _resolve_csv_paths(csv_path=None, csv_glob=None):
+    if csv_path:
+        return [_resolve_csv_path(csv_path)]
+
+    pattern = csv_glob or CSV_GLOB
+    candidates = sorted(Path(".").glob(pattern))
+    if not candidates:
+        raise FileNotFoundError(f"No CSV files found for glob: {pattern}")
+    return candidates
+
+
 def _to_int(value):
     return int(value) if value not in (None, "") else None
 
@@ -173,6 +153,23 @@ def filter_rows_by_node(rows, node_id):
         if row_node is None:
             continue
         if row_node != node_id:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def filter_rows_by_node_and_optional_rounds(rows, node_id, start_round=None, end_round=None):
+    filtered = []
+    for row in rows:
+        row_node = _to_int(row.get("Node_ID"))
+        row_round = _to_int(row.get("Round"))
+        if row_node is None or row_round is None:
+            continue
+        if row_node != node_id:
+            continue
+        if start_round is not None and row_round < start_round:
+            continue
+        if end_round is not None and row_round > end_round:
             continue
         filtered.append(row)
     return filtered
@@ -266,6 +263,69 @@ def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_rou
     plt.close(fig)
 
 
+def plot_latency_figure(csv_path, node_id, output_dir=None, start_round=None, end_round=None):
+    csv_path = _resolve_csv_path(csv_path)
+    rows, cert_columns = _load_rows(csv_path)
+    node_rows = filter_rows_by_node_and_optional_rounds(
+        rows,
+        node_id,
+        start_round=start_round,
+        end_round=end_round,
+    )
+
+    if not node_rows:
+        if start_round is not None and end_round is not None:
+            raise ValueError(
+                f"No rows found for Node_ID={node_id} in round range {start_round}-{end_round}."
+            )
+        raise ValueError(f"No rows found for Node_ID={node_id}.")
+
+    output_dir = Path(output_dir) if output_dir else csv_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = (
+        f"node{node_id}_rounds_{start_round}_{end_round}"
+        if start_round is not None and end_round is not None
+        else f"node{node_id}_all_rounds"
+    )
+    trend_path = output_dir / f"latency_over_rounds_{suffix}.png"
+    plot_latency_over_rounds(
+        node_rows,
+        cert_columns,
+        node_id,
+        trend_path,
+        start_round=start_round,
+        end_round=end_round,
+    )
+    return trend_path
+
+
+def plot_progress_figure(csv_path, node_id, start_round, end_round, output_dir=None):
+    csv_path = _resolve_csv_path(csv_path)
+    rows, cert_columns = _load_rows(csv_path)
+    filtered_rows = filter_certificate_rows(rows, node_id, start_round, end_round)
+
+    if not filtered_rows:
+        raise ValueError(
+            f"No rows found for Node_ID={node_id} in round range {start_round}-{end_round}."
+        )
+
+    output_dir = Path(output_dir) if output_dir else csv_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = f"node{node_id}_rounds_{start_round}_{end_round}"
+    progress_path = output_dir / f"progress_vs_avg_latency_{suffix}.png"
+    plot_progress_vs_avg_latency(
+        filtered_rows,
+        cert_columns,
+        node_id,
+        start_round,
+        end_round,
+        progress_path,
+    )
+    return progress_path
+
+
 def plot_certificate_figures(csv_path, node_id, start_round, end_round, output_dir=None):
     csv_path = _resolve_csv_path(csv_path)
     rows, cert_columns = _load_rows(csv_path)
@@ -311,8 +371,7 @@ def main():
         raise SystemExit("START_ROUND must be less than or equal to END_ROUND")
 
     configure_plot_style()
-
-    progress_path, trend_path = plot_certificate_figures(
+    progress_path = plot_progress_figure(
         CSV_PATH,
         NODE_ID,
         START_ROUND,
@@ -323,7 +382,6 @@ def main():
     selected_csv = _resolve_csv_path(CSV_PATH)
     print(f"Selected CSV: {selected_csv}")
     print(f"Saved progress plot to: {progress_path}")
-    print(f"Saved latency trend plot to: {trend_path}")
 
 
 if __name__ == "__main__":
