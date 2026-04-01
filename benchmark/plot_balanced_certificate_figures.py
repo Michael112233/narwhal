@@ -20,7 +20,7 @@ from plot_certificate_progress import (
 # Set `CSV_PATH` to a single CSV to plot one file only.
 # Leave it as None to batch-process all balanced analysis CSVs.
 CSV_PATH = None
-CSV_GLOB = "results/geo/balanced/**/*_round_certificate_analysis.csv"
+CSV_GLOB = "results/geo_uniform/balanced/**/*_round_certificate_analysis.csv"
 NODE_ID = 0
 
 # Round range used by plot_certificate_figures().
