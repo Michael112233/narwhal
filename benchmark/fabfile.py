@@ -73,17 +73,17 @@ def _cloudlab_bench_params():
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        # 'rate_type': 'balanced',
-        'rate_type': 'custom',
-        'percentages': [1, 1, 1, 1, 25, 25, 30, 30, 30, 30],
+        'rate_type': 'unbalanced',
+        # 'rate_type': 'custom',
+        # 'percentages': [30, 30, 30, 30, 30, 1, 1, 1, 1, 1],
         # 'percentages': [0,0,0,0,10,10,10,1,1,1],
         # 'rate': [10000,20000,30000,40000,50000,60000],
-        'rate': [10000,20000],
+        'rate': [20000,30000],
         # 'extra_rate': 15000,
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
-        'workload_tag': 'custom-high',
+        'workload_tag': 'zip3',
         'network_tag': '80ms',
         # 'trigger_attack': [True],
     }
@@ -99,7 +99,7 @@ def _cloudlab_node_params():
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500000,  # bytes
         'max_batch_delay': 5,  # ms
-        # 's':2.5
+        's':3
     }
 
 

@@ -22,9 +22,9 @@ import matplotlib.pyplot as plt
 from plot_certificate_progress import configure_plot_style
 
 
-RESULTS_ROOT = Path("results/80ms/balanced")
-MAX_RATE = 50_000
-OUTPUT_NAME = "tps_latency_80ms_balanced_upto_50k.png"
+RESULTS_ROOT = Path("results/80ms/custom-high-2")
+MAX_RATE = 20_000
+OUTPUT_NAME = "tps_latency_80ms_custom-high-2_upto_50k.png"
 USE_END_TO_END = True
 
 
@@ -54,7 +54,7 @@ def _parse_int(match: re.Match[str] | None) -> int | None:
 
 
 def _iter_summary_files(root: Path):
-    for path in sorted(root.glob("**/80ms_balanced_summary.txt")):
+    for path in sorted(root.glob("**/80ms_custom-high-2_summary.txt")):
         yield path
 
 
@@ -188,7 +188,7 @@ def plot_tps_latency(points: list[SummaryPoint], output_path: Path):
         )
 
     metric_name = "End-to-end" if USE_END_TO_END else "Consensus"
-    ax.set_title(f"80ms Balanced Latency vs TPS ({metric_name})")
+    ax.set_title(f"80ms Custom-high-2 Latency vs TPS ({metric_name})")
     ax.set_xlabel("TPS (tx/s)")
     ax.set_ylabel("Latency (ms)")
     ax.grid(True, linestyle="--", alpha=0.35)
