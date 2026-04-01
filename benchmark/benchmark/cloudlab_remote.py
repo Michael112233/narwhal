@@ -74,13 +74,14 @@ def _build_workload_details(rate, num_nodes, workers_per_node, bench_parameters,
         details['node_rates'] = TwoHeavyAllocator(rate, num_nodes).allocate()
     elif rate_type == 'custom':
         percentages = getattr(bench_parameters, 'percentages', None)
-        extra_rate = getattr(bench_parameters, 'extra_rate', None)
-        if extra_rate is None:
+        if percentages is None:
             raise BenchError(
-                'rate_type=custom requires bench parameter "extra_rate"',
-                ConfigError('missing extra_rate'),
+                'rate_type=custom requires bench parameter "percentages"',
+                ConfigError('missing percentages'),
             )
+        extra_rate = getattr(bench_parameters, 'extra_rate', None)
         allocator = CustomAllocator(rate, extra_rate, num_nodes, percentages)
+        details['custom_mode'] = allocator.mode
         details['percentages_raw'] = percentages
         details['percentages_normalized'] = allocator.percentages
         details['base_total_rate'] = allocator.base_total_tps
@@ -1591,15 +1592,13 @@ SCRIPTEOF'''
             extra_rate = getattr(bench_parameters, 'extra_rate', None)
             if percentages is None:
                 raise BenchError('rate_type=custom requires bench parameter "percentages"', ConfigError('missing percentages'))
-            if extra_rate is None:
-                raise BenchError('rate_type=custom requires bench parameter "extra_rate"', ConfigError('missing extra_rate'))
             try:
                 allocator = CustomAllocator(rate, extra_rate, num_nodes, percentages)
                 node_rates = allocator.allocate()
             except Exception as e:
                 raise BenchError('Failed to allocate custom node rates', e)
             Print.info(
-                f'Node rates (Custom base_total={allocator.base_total_tps}, '
+                f'Node rates (Custom mode={allocator.mode}, base_total={allocator.base_total_tps}, '
                 f'extra_total={allocator.extra_tps}, percentages={percentages}): '
                 f'{node_rates}'
             )
@@ -1793,7 +1792,7 @@ SCRIPTEOF'''
                                 'runs_total': bench_parameters.runs,
                                 'node_parameters': node_parameters.json,
                                 'trigger_attack': trigger_attack,
-                                'extra_rate': getattr(bench_parameters, 'extra_rate', 0),
+                                'extra_rate': getattr(bench_parameters, 'extra_rate', None),
                                 'percentages': getattr(bench_parameters, 'percentages', None),
                                 'extreme_x': getattr(bench_parameters, 'extreme_x', None),
                                 'workload_details': _build_workload_details(

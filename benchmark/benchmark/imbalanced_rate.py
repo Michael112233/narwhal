@@ -304,22 +304,27 @@ class CustomAllocator:
     def __init__(
         self,
         base_total_tps: int,
-        extra_tps: int,
+        extra_tps: int | None,
         nodes: int,
         percentages: list[float],
     ) -> None:
         """
         Custom workload allocator:
-        - the base total TPS is split evenly across all nodes
-        - the extra TPS is allocated according to the specified percentages
-        
-        :param base_total_tps: 基础总 TPS，先均分到所有节点
-        :param extra_tps: 额外总 TPS，按 percentages 分配
+        - if `extra_tps` is omitted, the full base total TPS is allocated according
+          to the specified percentages
+        - if `extra_tps` is provided, the base total TPS is split evenly across all
+          nodes and the extra TPS is allocated according to the specified
+          percentages
+
+        :param base_total_tps: 基础总 TPS
+        :param extra_tps: 可选额外总 TPS，按 percentages 分配
         :param nodes: 节点数 (例如 10)
         :param percentages: 每个节点的权重列表
         """
-        if base_total_tps < 0 or extra_tps < 0 or nodes <= 0:
-            raise ValueError("base_total_tps and extra_tps must be >= 0, nodes must be > 0")
+        if base_total_tps < 0 or nodes <= 0:
+            raise ValueError("base_total_tps must be >= 0 and nodes must be > 0")
+        if extra_tps is not None and extra_tps < 0:
+            raise ValueError("extra_tps must be >= 0 when provided")
         if len(percentages) != nodes:
             raise ValueError(f"percentages list must have exactly {nodes} elements")
         if any(p < 0 for p in percentages):
@@ -331,29 +336,40 @@ class CustomAllocator:
 
         normalized = [p / total_percent for p in percentages]
 
-        base_share = base_total_tps // nodes
-        base_remainder = base_total_tps % nodes
-        base_node_rates = [base_share] * nodes
-        for i in range(base_remainder):
-            base_node_rates[i] += 1
+        def allocate_weighted(total_tps: int) -> list[int]:
+            raw_rates = [total_tps * p for p in normalized]
+            allocated = [int(rate) for rate in raw_rates]
+            remainder = total_tps - sum(allocated)
+            if remainder > 0:
+                fractions = [(rate - int(rate)) for rate in raw_rates]
+                adjust_indices = sorted(
+                    range(nodes),
+                    key=lambda index: fractions[index],
+                    reverse=True,
+                )
+                for i in range(remainder):
+                    allocated[adjust_indices[i]] += 1
+            return allocated
 
-        raw_extra_rates = [extra_tps * p for p in normalized]
-        extra_node_rates = [int(rate) for rate in raw_extra_rates]
-        extra_remainder = extra_tps - sum(extra_node_rates)
-        if extra_remainder > 0:
-            fractions = [(rate - int(rate)) for rate in raw_extra_rates]
-            adjust_indices = sorted(
-                range(nodes),
-                key=lambda index: fractions[index],
-                reverse=True,
-            )
-            for i in range(extra_remainder):
-                extra_node_rates[adjust_indices[i]] += 1
+        if extra_tps is None:
+            mode = "weighted_rate"
+            base_node_rates = allocate_weighted(base_total_tps)
+            extra_node_rates = [0] * nodes
+        else:
+            mode = "base_plus_extra"
+            base_share = base_total_tps // nodes
+            base_remainder = base_total_tps % nodes
+            base_node_rates = [base_share] * nodes
+            for i in range(base_remainder):
+                base_node_rates[i] += 1
+
+            extra_node_rates = allocate_weighted(extra_tps)
 
         self.base_total_tps = base_total_tps
         self.extra_tps = extra_tps
-        self.total_tps = base_total_tps + extra_tps
+        self.total_tps = base_total_tps + (extra_tps or 0)
         self.nodes = nodes
+        self.mode = mode
         self.percentages = normalized
         self.base_node_rates = base_node_rates
         self.extra_node_rates = extra_node_rates

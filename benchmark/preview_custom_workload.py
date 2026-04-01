@@ -4,8 +4,10 @@ Preview the per-node workload distribution produced by CustomAllocator.
 
 This uses the same allocation logic as the benchmark runner, so the output
 matches what `fab local` / `fab cloudlab-remote` will use for `rate_type=custom`.
-The base total `rate` is first split evenly across all nodes, then `extra_rate`
-is distributed according to `percentages`.
+When `extra_rate` is omitted, the full `rate` is distributed according to
+`percentages`. When `extra_rate` is provided, the base `rate` is first split
+evenly across all nodes, then `extra_rate` is distributed according to
+`percentages`.
 
 Examples:
     python3 preview_custom_workload.py
@@ -19,9 +21,9 @@ from benchmark.imbalanced_rate import CustomAllocator
 
 
 # Edit these defaults directly if you prefer not to use command-line flags.
-DEFAULT_TOTAL_RATE = 20000  
-DEFAULT_EXTRA_RATE = 15000
-DEFAULT_PERCENTAGES = "0,0,0,0,10,10,10,1,1,1"
+DEFAULT_TOTAL_RATE = 20000
+DEFAULT_EXTRA_RATE = None
+DEFAULT_PERCENTAGES = "1, 1, 1, 1, 25, 25, 30, 30, 30, 30"
 
 
 def parse_percentages(raw: str) -> List[float]:
@@ -43,7 +45,7 @@ def parse_percentages(raw: str) -> List[float]:
     return values
 
 
-def preview_distribution(total_rate: int, extra_rate: int, percentages: List[float]):
+def preview_distribution(total_rate: int, extra_rate: int | None, percentages: List[float]):
     allocator = CustomAllocator(
         total_rate,
         extra_rate,
@@ -57,7 +59,12 @@ def preview_distribution(total_rate: int, extra_rate: int, percentages: List[flo
     print("Custom workload preview")
     print("-" * 72)
     print(f"Base total rate: {total_rate:,} tx/s")
-    print(f"Extra rate total: {extra_rate:,} tx/s")
+    if extra_rate is None:
+        print("Extra rate total: not set")
+        print("Allocation mode: distribute full base rate by percentages")
+    else:
+        print(f"Extra rate total: {extra_rate:,} tx/s")
+        print("Allocation mode: even base rate + percentage-distributed extra rate")
     print(f"Effective total rate: {allocator.total_tps:,} tx/s")
     print(f"Node count: {len(percentages)}")
     print(f"Raw percentages: {percentages}")
@@ -102,7 +109,10 @@ def build_parser():
         "--extra-rate",
         type=int,
         default=DEFAULT_EXTRA_RATE,
-        help=f"Extra total rate distributed by percentages (default: {DEFAULT_EXTRA_RATE})",
+        help=(
+            "Optional extra total rate distributed by percentages. "
+            "If omitted, the full base rate is distributed by percentages."
+        ),
     )
     parser.add_argument(
         "--percentages",
