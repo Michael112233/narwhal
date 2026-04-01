@@ -274,6 +274,18 @@ impl Proposer {
             .max()
     }
 
+    fn highest_unfinished_critical_round_in_wave(&self, wave: Round) -> Option<Round> {
+        let wave_start = wave.saturating_mul(self.solid_wave_length).saturating_add(1);
+        let wave_end = wave_start
+            .saturating_add(self.solid_wave_length.saturating_sub(1));
+
+        (wave_start..=wave_end)
+            .rev()
+            .find(|round| {
+                self.is_critical_round(*round) && !self.proposed_rounds.contains(round)
+            })
+    }
+
     fn wave_has_proposed_critical_round(&self, wave: Round) -> bool {
         self.proposed_rounds
             .iter()
@@ -282,7 +294,9 @@ impl Proposer {
 
     fn stale_wave_policy(&self, wave: Round) -> StaleWavePolicy {
         if self.wave_has_proposed_critical_round(wave) {
-            StaleWavePolicy::DropWholeWave
+            self.highest_unfinished_critical_round_in_wave(wave)
+                .map(StaleWavePolicy::KeepOnlyRound)
+                .unwrap_or(StaleWavePolicy::DropWholeWave)
         } else if let Some(retained_round) = self.highest_unlocked_critical_round_in_wave(wave) {
             StaleWavePolicy::KeepOnlyRound(retained_round)
         } else {
