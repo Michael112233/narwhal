@@ -51,6 +51,8 @@ pub struct Proposer {
     solid_wave_length: u64,
     /// Short grace period after parents become ready to absorb late certificates.
     parent_grace_delay: Duration,
+    /// Highest wave observed locally; older-wave parent updates are stale once a newer wave arrives.
+    latest_observed_wave: Round,
 }
 
 struct UnlockedRound {
@@ -130,6 +132,7 @@ impl Proposer {
                 solid_step_length,
                 solid_wave_length,
                 parent_grace_delay: Duration::from_millis(parent_grace_delay_ms),
+                latest_observed_wave: 0,
             }
             .run()
             .await;
@@ -152,8 +155,14 @@ impl Proposer {
         state.solid_step_union.extend(update.solid_step_union);
         state.solid_wave_union.extend(update.solid_wave_union);
         (
-            state.solid_step_union.len().saturating_sub(solid_step_old_len),
-            state.solid_wave_union.len().saturating_sub(solid_wave_old_len),
+            state
+                .solid_step_union
+                .len()
+                .saturating_sub(solid_step_old_len),
+            state
+                .solid_wave_union
+                .len()
+                .saturating_sub(solid_wave_old_len),
         )
     }
 
@@ -242,7 +251,52 @@ impl Proposer {
         next_deadline
     }
 
+    fn wave_of(&self, round: Round) -> Round {
+        if self.solid_wave_length == 0 {
+            return 0;
+        }
+
+        round.saturating_sub(1) / self.solid_wave_length
+    }
+
+    fn drop_stale_wave_rounds(&mut self) {
+        if self.latest_observed_wave == 0 {
+            return;
+        }
+
+        let stale_rounds: Vec<_> = self
+            .unlocked_rounds
+            .keys()
+            .copied()
+            .filter(|round| self.wave_of(*round) < self.latest_observed_wave)
+            .collect();
+
+        for stale_round in stale_rounds {
+            let stale_wave = self.wave_of(stale_round);
+            self.unlocked_rounds.remove(&stale_round);
+            debug!(
+                "Discarding parents for stale round {} because wave {} lags active wave {}",
+                stale_round, stale_wave, self.latest_observed_wave
+            );
+        }
+    }
+
     fn unlock_round(&mut self, round: Round, parent_update: ProposalParents) {
+        let round_wave = self.wave_of(round);
+        if round_wave < self.latest_observed_wave {
+            self.unlocked_rounds.remove(&round);
+            debug!(
+                "Discarding parents for round {} because wave {} is older than active wave {}",
+                round, round_wave, self.latest_observed_wave
+            );
+            return;
+        }
+
+        if round_wave > self.latest_observed_wave {
+            self.latest_observed_wave = round_wave;
+            self.drop_stale_wave_rounds();
+        }
+
         if self.proposed_rounds.contains(&round) {
             debug!(
                 "Received stale parents for already proposed round {}",
@@ -467,7 +521,10 @@ impl Proposer {
         loop {
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = Instant::now() >= payload_deadline;
+            self.drop_stale_wave_rounds();
             if let Some(decision) = self.next_proposal_round(timer_expired, enough_digests) {
+                self.latest_observed_wave =
+                    self.latest_observed_wave.max(self.wave_of(decision.round));
                 if decision.round != 1 {
                     debug!(
                         "Proposing {:?} round {} (payload={}, timer_expired={}, enough_digests={})",
