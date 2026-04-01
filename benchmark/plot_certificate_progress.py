@@ -255,7 +255,7 @@ def plot_latency_over_rounds(rows, cert_columns, node_id, output_path, start_rou
     )
     ax.set_xlabel("Round")
     ax.set_ylabel("Time Delta (ms)")
-    ax.set_ylim(0, 3000)
+    ax.set_ylim(0, 1500)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(title="Arrival Order", ncol=2)
     fig.tight_layout()
