@@ -1,4 +1,5 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
+from datetime import datetime
 from os.path import join
 
 
@@ -77,12 +78,32 @@ class PathMaker:
         return '.last_benchmark_context.json'
 
     @staticmethod
+    def timestamp():
+        return datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    @staticmethod
     def tagged_results_path(network_tag, workload_tag):
         return join(
             PathMaker.results_path(),
             PathMaker._sanitize_tag(network_tag),
             PathMaker._sanitize_tag(workload_tag),
         )
+
+    @staticmethod
+    def run_folder_name(network_tag, workload_tag, base_run_id, nodes, rate, run_index):
+        return (
+            f'{PathMaker._sanitize_tag(network_tag)}_'
+            f'{PathMaker._sanitize_tag(workload_tag)}_'
+            f'{PathMaker._sanitize_tag(base_run_id)}_'
+            f'n{nodes}_r{rate}_run{run_index}'
+        )
+
+    @staticmethod
+    def experiment_path(network_tag, workload_tag, run_id=None):
+        base_dir = PathMaker.tagged_results_path(network_tag, workload_tag)
+        if run_id is None:
+            return base_dir
+        return join(base_dir, PathMaker._sanitize_tag(run_id))
 
     @staticmethod
     def result_file(
@@ -94,9 +115,10 @@ class PathMaker:
         tx_size,
         network_tag=None,
         workload_tag=None,
+        run_id=None,
     ):
         if network_tag is not None and workload_tag is not None:
-            base_dir = PathMaker.tagged_results_path(network_tag, workload_tag)
+            base_dir = PathMaker.experiment_path(network_tag, workload_tag, run_id)
         else:
             base_dir = PathMaker.results_path()
         return join(
@@ -105,36 +127,36 @@ class PathMaker:
         )
 
     @staticmethod
-    def summary_file(network_tag, workload_tag):
+    def summary_file(network_tag, workload_tag, run_id=None):
         return join(
-            PathMaker.tagged_results_path(network_tag, workload_tag),
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
             'summary.txt',
         )
 
     @staticmethod
-    def analysis_csv_file(network_tag, workload_tag, experiment_group=None):
+    def analysis_csv_file(network_tag, workload_tag, run_id=None, experiment_group=None):
         filename = 'round_certificate_analysis.csv'
         if experiment_group is not None:
             filename = f'round_certificate_analysis_exp{experiment_group}.csv'
         return join(
-            PathMaker.tagged_results_path(network_tag, workload_tag),
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
             filename,
         )
 
     @staticmethod
-    def pivot_csv_file(network_tag, workload_tag, experiment_group=None):
+    def pivot_csv_file(network_tag, workload_tag, run_id=None, experiment_group=None):
         filename = 'round_end_time_pivot.csv'
         if experiment_group is not None:
             filename = f'round_end_time_pivot_exp{experiment_group}.csv'
         return join(
-            PathMaker.tagged_results_path(network_tag, workload_tag),
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
             filename,
         )
 
     @staticmethod
-    def metadata_file(network_tag, workload_tag):
+    def metadata_file(network_tag, workload_tag, run_id=None):
         return join(
-            PathMaker.tagged_results_path(network_tag, workload_tag),
+            PathMaker.experiment_path(network_tag, workload_tag, run_id),
             'metadata.json',
         )
 

@@ -1637,6 +1637,7 @@ SCRIPTEOF'''
             'workload_tag',
             bench_parameters_dict.get('rate_type', 'default_workload'),
         )
+        base_run_id = PathMaker.timestamp()
         
         # Select which hosts to use
         selected_hosts = self._select_hosts(bench_parameters)
@@ -1673,8 +1674,17 @@ SCRIPTEOF'''
                     
                     # Run benchmarks for this configuration
                     for run in range(bench_parameters.runs):
+                        run_number = run + 1
+                        run_id = PathMaker.run_folder_name(
+                            network_tag,
+                            workload_tag,
+                            base_run_id,
+                            n,
+                            rate,
+                            run_number,
+                        )
                         attack_str = f", attack={'ON' if trigger_attack else 'OFF'}" if trigger_attack is not None else ""
-                        Print.heading(f'\nRunning benchmark: nodes={n}, rate={rate}{attack_str}, run={run+1}/{bench_parameters.runs}')
+                        Print.heading(f'\nRunning benchmark: nodes={n}, rate={rate}{attack_str}, run={run_number}/{bench_parameters.runs}')
                         
                         try:
                             # Run the actual benchmark
@@ -1683,6 +1693,8 @@ SCRIPTEOF'''
                             )
 
                             run_context = {
+                                'run_id': run_id,
+                                'base_run_id': base_run_id,
                                 'network_tag': network_tag,
                                 'workload_tag': workload_tag,
                                 'faults': bench_parameters.faults,
@@ -1693,9 +1705,24 @@ SCRIPTEOF'''
                                 'rate_type': bench_parameters.rate_type,
                                 'tx_size': bench_parameters.tx_size,
                                 'duration': bench_parameters.duration,
-                                'run_index': run + 1,
+                                'run_index': run_number,
                                 'runs_total': bench_parameters.runs,
                             }
+                            if bench_parameters.rate_type == 'custom':
+                                percentages = list(getattr(bench_parameters, 'percentages', []) or [])
+                                if percentages:
+                                    total_percentage = sum(percentages)
+                                    normalized_percentages = [
+                                        p / total_percentage for p in percentages
+                                    ] if total_percentage > 0 else []
+                                    actual_node_loads = CustomAllocator(
+                                        rate,
+                                        n,
+                                        percentages,
+                                    ).allocate()
+                                    run_context['custom_percentages'] = percentages
+                                    run_context['custom_percentages_normalized'] = normalized_percentages
+                                    run_context['custom_actual_node_loads'] = actual_node_loads
                             Path(PathMaker.run_context_file()).write_text(
                                 json.dumps(run_context, indent=2) + '\n'
                             )
@@ -1711,6 +1738,7 @@ SCRIPTEOF'''
                                 bench_parameters.tx_size,
                                 network_tag=network_tag,
                                 workload_tag=workload_tag,
+                                run_id=run_id,
                             )
                             Path(result_file).parent.mkdir(parents=True, exist_ok=True)
                             result.print(result_file)

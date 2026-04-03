@@ -3,7 +3,7 @@
 Script to run CloudLab benchmark and post-process logs.
 
 Generated artifacts are stored under:
-result_decouple/<network_tag>/<workload_tag>/
+result_decouple/<network_tag>/<workload_tag>/<run_id>/
 """
 
 import argparse
@@ -31,6 +31,7 @@ def _default_run_context():
     return {
         'network_tag': 'default_network',
         'workload_tag': 'default_workload',
+        'run_id': 'default_network_default_workload_default_run_n0_r0_run1',
         'nodes': 10,
     }
 
@@ -40,7 +41,17 @@ def load_run_context():
     if context_path.exists():
         try:
             with context_path.open('r') as handle:
-                return json.load(handle)
+                data = json.load(handle)
+            if 'run_id' not in data:
+                data['run_id'] = PathMaker.run_folder_name(
+                    data.get('network_tag', 'default_network'),
+                    data.get('workload_tag', 'default_workload'),
+                    data.get('base_run_id', 'legacy_run'),
+                    data.get('nodes', 0),
+                    data.get('rate', 0),
+                    data.get('run_index', 1),
+                )
+            return data
         except Exception as e:
             Print.warn(f'Failed to load run context from {context_path}: {e}')
     return _default_run_context()
@@ -48,9 +59,10 @@ def load_run_context():
 
 def _results_dir(run_context):
     directory = Path(
-        PathMaker.tagged_results_path(
+        PathMaker.experiment_path(
             run_context['network_tag'],
             run_context['workload_tag'],
+            run_context.get('run_id'),
         )
     )
     directory.mkdir(parents=True, exist_ok=True)
@@ -62,6 +74,7 @@ def _summary_path(run_context):
         PathMaker.summary_file(
             run_context['network_tag'],
             run_context['workload_tag'],
+            run_context.get('run_id'),
         )
     )
 
@@ -71,6 +84,7 @@ def _analysis_path(run_context, experiment_group=None):
         PathMaker.analysis_csv_file(
             run_context['network_tag'],
             run_context['workload_tag'],
+            run_context.get('run_id'),
             experiment_group=experiment_group,
         )
     )
@@ -81,6 +95,7 @@ def _pivot_path(run_context, experiment_group=None):
         PathMaker.pivot_csv_file(
             run_context['network_tag'],
             run_context['workload_tag'],
+            run_context.get('run_id'),
             experiment_group=experiment_group,
         )
     )
@@ -91,6 +106,7 @@ def _metadata_path(run_context):
         PathMaker.metadata_file(
             run_context['network_tag'],
             run_context['workload_tag'],
+            run_context.get('run_id'),
         )
     )
 
@@ -101,6 +117,9 @@ def _annotate_summary_with_run_context(summary_text, run_context):
         return summary_text
 
     context_lines = []
+
+    def _format_percentages(values):
+        return '[' + ', '.join(f'{value:.2%}' for value in values) + ']'
 
     network_tag = run_context.get('network_tag')
     if network_tag:
@@ -118,6 +137,30 @@ def _annotate_summary_with_run_context(summary_text, run_context):
     runs_total = run_context.get('runs_total')
     if run_index is not None and runs_total is not None:
         context_lines.append(f' Run index: {run_index}/{runs_total}\n')
+
+    run_id = run_context.get('run_id')
+    if run_id:
+        context_lines.append(f' Run folder: {run_id}\n')
+
+    if rate_type == 'custom':
+        raw_percentages = run_context.get('custom_percentages')
+        if raw_percentages:
+            context_lines.append(
+                f' Custom percentages (raw): {raw_percentages}\n'
+            )
+
+        normalized_percentages = run_context.get('custom_percentages_normalized')
+        if normalized_percentages:
+            context_lines.append(
+                ' Custom percentages (normalized): '
+                f'{_format_percentages(normalized_percentages)}\n'
+            )
+
+        actual_node_loads = run_context.get('custom_actual_node_loads')
+        if actual_node_loads:
+            context_lines.append(
+                f' Custom actual node loads (tx/s): {actual_node_loads}\n'
+            )
 
     if not context_lines:
         return summary_text
