@@ -89,7 +89,7 @@ class LogAggregator:
         self.max_latencies = max_latencies
 
         data = ''
-        for filename in glob(join(PathMaker.results_path(), '*.txt')):
+        for filename in glob(join(PathMaker.results_path(), '**', '*.txt'), recursive=True):
             with open(filename, 'r') as f:
                 data += f.read()
 

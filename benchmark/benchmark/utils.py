@@ -12,6 +12,14 @@ class BenchError(Exception):
 
 class PathMaker:
     @staticmethod
+    def _sanitize_tag(value):
+        assert isinstance(value, str) and value.strip()
+        return ''.join(
+            ch if ch.isalnum() or ch in ('-', '_') else '_'
+            for ch in value.strip()
+        )
+
+    @staticmethod
     def binary_path():
         return join('..', 'target', 'release')
 
@@ -62,13 +70,72 @@ class PathMaker:
 
     @staticmethod
     def results_path():
-        return 'results'
+        return 'result_decouple'
 
     @staticmethod
-    def result_file(faults, nodes, workers, collocate, rate, tx_size):
+    def run_context_file():
+        return '.last_benchmark_context.json'
+
+    @staticmethod
+    def tagged_results_path(network_tag, workload_tag):
         return join(
             PathMaker.results_path(),
+            PathMaker._sanitize_tag(network_tag),
+            PathMaker._sanitize_tag(workload_tag),
+        )
+
+    @staticmethod
+    def result_file(
+        faults,
+        nodes,
+        workers,
+        collocate,
+        rate,
+        tx_size,
+        network_tag=None,
+        workload_tag=None,
+    ):
+        if network_tag is not None and workload_tag is not None:
+            base_dir = PathMaker.tagged_results_path(network_tag, workload_tag)
+        else:
+            base_dir = PathMaker.results_path()
+        return join(
+            base_dir,
             f'bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+        )
+
+    @staticmethod
+    def summary_file(network_tag, workload_tag):
+        return join(
+            PathMaker.tagged_results_path(network_tag, workload_tag),
+            'summary.txt',
+        )
+
+    @staticmethod
+    def analysis_csv_file(network_tag, workload_tag, experiment_group=None):
+        filename = 'round_certificate_analysis.csv'
+        if experiment_group is not None:
+            filename = f'round_certificate_analysis_exp{experiment_group}.csv'
+        return join(
+            PathMaker.tagged_results_path(network_tag, workload_tag),
+            filename,
+        )
+
+    @staticmethod
+    def pivot_csv_file(network_tag, workload_tag, experiment_group=None):
+        filename = 'round_end_time_pivot.csv'
+        if experiment_group is not None:
+            filename = f'round_end_time_pivot_exp{experiment_group}.csv'
+        return join(
+            PathMaker.tagged_results_path(network_tag, workload_tag),
+            filename,
+        )
+
+    @staticmethod
+    def metadata_file(network_tag, workload_tag):
+        return join(
+            PathMaker.tagged_results_path(network_tag, workload_tag),
+            'metadata.json',
         )
 
     @staticmethod

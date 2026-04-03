@@ -17,6 +17,7 @@ from copy import deepcopy
 import subprocess
 import re
 import shlex
+import json
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker
@@ -1630,6 +1631,12 @@ SCRIPTEOF'''
             node_parameters = NodeParameters(node_parameters_dict)
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
+
+        network_tag = bench_parameters_dict.get('network_tag', 'default_network')
+        workload_tag = bench_parameters_dict.get(
+            'workload_tag',
+            bench_parameters_dict.get('rate_type', 'default_workload'),
+        )
         
         # Select which hosts to use
         selected_hosts = self._select_hosts(bench_parameters)
@@ -1674,17 +1681,39 @@ SCRIPTEOF'''
                             self._run_single(
                                 rate, committee_copy, bench_parameters, node_parameters, selected_hosts, debug
                             )
+
+                            run_context = {
+                                'network_tag': network_tag,
+                                'workload_tag': workload_tag,
+                                'faults': bench_parameters.faults,
+                                'nodes': n,
+                                'workers': bench_parameters.workers,
+                                'collocate': bench_parameters.collocate,
+                                'rate': rate,
+                                'rate_type': bench_parameters.rate_type,
+                                'tx_size': bench_parameters.tx_size,
+                                'duration': bench_parameters.duration,
+                                'run_index': run + 1,
+                                'runs_total': bench_parameters.runs,
+                            }
+                            Path(PathMaker.run_context_file()).write_text(
+                                json.dumps(run_context, indent=2) + '\n'
+                            )
                             
                             # Download and parse logs
                             result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
-                            result.print(PathMaker.result_file(
+                            result_file = PathMaker.result_file(
                                 bench_parameters.faults,
                                 n,
                                 bench_parameters.workers,
                                 bench_parameters.collocate,
                                 rate,
                                 bench_parameters.tx_size,
-                            ))
+                                network_tag=network_tag,
+                                workload_tag=workload_tag,
+                            )
+                            Path(result_file).parent.mkdir(parents=True, exist_ok=True)
+                            result.print(result_file)
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:
                             self.kill(hosts=selected_hosts)
                             if isinstance(e, GroupException):

@@ -235,13 +235,15 @@ def cloudlab_remote(ctx, debug=True):
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        # 'rate_type': 'balanced',
-        'rate_type': 'imbalanced',
+        'rate_type': 'balanced',
+        # 'rate_type': 'imbalanced',
         # 'rate': [40000, 60000, 80000,100000,120000,140000],
-        'rate': [20000],
+        'rate': [20000, 40000, 60000, 80000, 100000, 120000, 140000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
+        'network_tag': 'geo_uniform',
+        'workload_tag': 'balanced',
         # 'trigger_attack': [True], 
     }
     node_params = {
