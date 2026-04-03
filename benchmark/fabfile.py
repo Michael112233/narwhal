@@ -243,7 +243,7 @@ def cloudlab_remote(ctx, debug=True):
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
-        'network_tag': 'geo_uniform',
+        'network_tag': '80ms',
         'workload_tag': 'custom-high-3',
         # 'trigger_attack': [True], 
     }

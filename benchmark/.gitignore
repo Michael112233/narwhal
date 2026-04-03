@@ -1,6 +1,6 @@
 node
 benchmark_client
-result_decouple
+# result_decouple
 plots
 
 # Byte-compiled / optimized / DLL files
