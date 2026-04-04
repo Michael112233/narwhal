@@ -237,14 +237,15 @@ def cloudlab_remote(ctx, debug=True):
         'collocate': True,
         # 'rate_type': 'balanced',
         'rate_type': 'custom',
-        'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6],
+        # 'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6],
+        'percentages': [6, 6, 6, 6, 1, 1, 6, 6, 1, 1],
         # 'rate': [40000, 60000, 80000,100000,120000,140000],
         'rate': [20000, 40000, 60000, 80000, 100000, 120000, 140000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
         'network_tag': '80ms',
-        'workload_tag': 'custom-high-3',
+        'workload_tag': 'custom-high-3opp',
         # 'trigger_attack': [True], 
     }
     node_params = {
