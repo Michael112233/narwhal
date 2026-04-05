@@ -13,6 +13,7 @@ Paper-style version:
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, stdev
@@ -20,6 +21,11 @@ from statistics import mean, stdev
 import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib.patches import Patch
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+BENCHMARK_DIR = SCRIPT_DIR.parent.parent
+if str(BENCHMARK_DIR) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_DIR))
 
 from plot_certificate_progress import configure_plot_style
 
@@ -187,9 +193,11 @@ def _build_rows():
 def _set_academic_style():
     plt.rcParams.update(
         {
-            "font.family": "serif",
-            "font.serif": ["Times New Roman", "Times", "DejaVu Serif", "STIXGeneral"],
-            "mathtext.fontset": "stix",
+            # Use matplotlib's default sans-serif academic style for
+            # titles/legends instead of Times/STIX.
+            "font.family": "sans-serif",
+            "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
+            "mathtext.fontset": "dejavusans",
             "font.size": 6,
             "axes.labelsize": 7,
             "axes.titlesize": 7,
