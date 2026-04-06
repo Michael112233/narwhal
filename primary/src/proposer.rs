@@ -51,6 +51,8 @@ pub struct Proposer {
     solid_wave_length: u64,
     /// Short grace period after parents become ready to absorb late certificates.
     parent_grace_delay: Duration,
+    /// Highest wave observed locally; older-wave parent updates are stale once a newer wave arrives.
+    latest_observed_wave: Round,
 }
 
 struct UnlockedRound {
@@ -72,6 +74,13 @@ enum RoundClass {
 struct ProposalDecision {
     round: Round,
     include_payload: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StaleWavePolicy {
+    KeepWholeWave,
+    KeepOnlyRound(Round),
+    DropWholeWave,
 }
 
 impl Proposer {
@@ -130,6 +139,7 @@ impl Proposer {
                 solid_step_length,
                 solid_wave_length,
                 parent_grace_delay: Duration::from_millis(parent_grace_delay_ms),
+                latest_observed_wave: 0,
             }
             .run()
             .await;
@@ -152,8 +162,14 @@ impl Proposer {
         state.solid_step_union.extend(update.solid_step_union);
         state.solid_wave_union.extend(update.solid_wave_union);
         (
-            state.solid_step_union.len().saturating_sub(solid_step_old_len),
-            state.solid_wave_union.len().saturating_sub(solid_wave_old_len),
+            state
+                .solid_step_union
+                .len()
+                .saturating_sub(solid_step_old_len),
+            state
+                .solid_wave_union
+                .len()
+                .saturating_sub(solid_wave_old_len),
         )
     }
 
@@ -242,7 +258,141 @@ impl Proposer {
         next_deadline
     }
 
+    fn wave_of(&self, round: Round) -> Round {
+        if self.solid_wave_length == 0 {
+            return 0;
+        }
+
+        round.saturating_sub(1) / self.solid_wave_length
+    }
+
+    fn highest_unlocked_critical_round_in_wave(&self, wave: Round) -> Option<Round> {
+        self.unlocked_rounds
+            .keys()
+            .copied()
+            .filter(|round| self.wave_of(*round) == wave && self.is_critical_round(*round))
+            .max()
+    }
+
+    fn highest_unfinished_critical_round_in_wave(&self, wave: Round) -> Option<Round> {
+        let wave_start = wave.saturating_mul(self.solid_wave_length).saturating_add(1);
+        let wave_end = wave_start
+            .saturating_add(self.solid_wave_length.saturating_sub(1));
+
+        (wave_start..=wave_end)
+            .rev()
+            .find(|round| {
+                self.is_critical_round(*round) && !self.proposed_rounds.contains(round)
+            })
+    }
+
+    fn wave_has_proposed_critical_round(&self, wave: Round) -> bool {
+        self.proposed_rounds
+            .iter()
+            .any(|round| self.wave_of(*round) == wave && self.is_critical_round(*round))
+    }
+
+    fn stale_wave_policy(&self, wave: Round) -> StaleWavePolicy {
+        if self.wave_has_proposed_critical_round(wave) {
+            self.highest_unfinished_critical_round_in_wave(wave)
+                .map(StaleWavePolicy::KeepOnlyRound)
+                .unwrap_or(StaleWavePolicy::DropWholeWave)
+        } else if let Some(retained_round) = self.highest_unlocked_critical_round_in_wave(wave) {
+            StaleWavePolicy::KeepOnlyRound(retained_round)
+        } else {
+            StaleWavePolicy::KeepWholeWave
+        }
+    }
+
+    fn drop_stale_wave_rounds(&mut self) {
+        if self.latest_observed_wave == 0 {
+            return;
+        }
+
+        let stale_waves: HashSet<_> = self
+            .unlocked_rounds
+            .keys()
+            .copied()
+            .map(|round| self.wave_of(round))
+            .filter(|wave| *wave < self.latest_observed_wave)
+            .collect();
+
+        for stale_wave in stale_waves {
+            match self.stale_wave_policy(stale_wave) {
+                StaleWavePolicy::KeepWholeWave => {
+                    debug!(
+                        "Retaining stale wave {} because it does not yet contain a critical round",
+                        stale_wave
+                    );
+                }
+                StaleWavePolicy::KeepOnlyRound(retained_round) => {
+                    let stale_rounds: Vec<_> = self
+                        .unlocked_rounds
+                        .keys()
+                        .copied()
+                        .filter(|round| {
+                            self.wave_of(*round) == stale_wave && *round != retained_round
+                        })
+                        .collect();
+
+                    for stale_round in stale_rounds {
+                        self.unlocked_rounds.remove(&stale_round);
+                        debug!(
+                            "Discarding parents for stale round {} because wave {} lags active wave {} and critical round {} is being retained",
+                            stale_round, stale_wave, self.latest_observed_wave, retained_round
+                        );
+                    }
+                }
+                StaleWavePolicy::DropWholeWave => {
+                    let stale_rounds: Vec<_> = self
+                        .unlocked_rounds
+                        .keys()
+                        .copied()
+                        .filter(|round| self.wave_of(*round) == stale_wave)
+                        .collect();
+
+                    for stale_round in stale_rounds {
+                        self.unlocked_rounds.remove(&stale_round);
+                        debug!(
+                            "Discarding parents for stale round {} because wave {} already has a critical round and lags active wave {}",
+                            stale_round, stale_wave, self.latest_observed_wave
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn unlock_round(&mut self, round: Round, parent_update: ProposalParents) {
+        let round_wave = self.wave_of(round);
+        if round_wave < self.latest_observed_wave {
+            match self.stale_wave_policy(round_wave) {
+                StaleWavePolicy::KeepWholeWave => {}
+                StaleWavePolicy::KeepOnlyRound(retained_round) if round == retained_round => {}
+                StaleWavePolicy::KeepOnlyRound(retained_round) => {
+                    self.unlocked_rounds.remove(&round);
+                    debug!(
+                        "Discarding parents for round {} because wave {} is older than active wave {} and critical round {} is being retained",
+                        round, round_wave, self.latest_observed_wave, retained_round
+                    );
+                    return;
+                }
+                StaleWavePolicy::DropWholeWave => {
+                    self.unlocked_rounds.remove(&round);
+                    debug!(
+                        "Discarding parents for round {} because wave {} is older than active wave {} and already has a critical round",
+                        round, round_wave, self.latest_observed_wave
+                    );
+                    return;
+                }
+            }
+        }
+
+        if round_wave > self.latest_observed_wave {
+            self.latest_observed_wave = round_wave;
+            self.drop_stale_wave_rounds();
+        }
+
         if self.proposed_rounds.contains(&round) {
             debug!(
                 "Received stale parents for already proposed round {}",
@@ -467,7 +617,10 @@ impl Proposer {
         loop {
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = Instant::now() >= payload_deadline;
+            self.drop_stale_wave_rounds();
             if let Some(decision) = self.next_proposal_round(timer_expired, enough_digests) {
+                self.latest_observed_wave =
+                    self.latest_observed_wave.max(self.wave_of(decision.round));
                 if decision.round != 1 {
                     debug!(
                         "Proposing {:?} round {} (payload={}, timer_expired={}, enough_digests={})",
