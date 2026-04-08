@@ -235,18 +235,19 @@ def cloudlab_remote(ctx, debug=True):
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        # 'rate_type': 'balanced',
-        'rate_type': 'custom',
-        'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6],
+        'rate_type': 'balanced',
+        # 'rate_type': 'custom',
+        # 'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6],
         # 'percentages': [1, 1, 1, 1, 30, 30, 30, 30, 30, 30],
         # 'percentages': [6, 6, 6, 6, 1, 1, 6, 6, 1, 1],
         # 'rate': [40000, 60000, 80000,100000,120000,140000],
         'rate': [20000, 40000, 60000, 80000, 100000, 120000, 140000],
+        # 'rate': [20000, 40000, 60000, 80000, 100000, 120000, 140000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
-        'network_tag': 'geo',
-        'workload_tag': 'custom-high-3',
+        'network_tag': 'no-delay',
+        'workload_tag': 'balanced',
         # 'trigger_attack': [True], 
     }
     node_params = {
@@ -257,7 +258,7 @@ def cloudlab_remote(ctx, debug=True):
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500000,  # bytes
         'max_batch_delay': 200,  # ms
-        's': 2.5
+        # 's': 2.5
     }
     try:
         _get_cloudlab_bench()(ctx).run(bench_params, node_params, debug)
