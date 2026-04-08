@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
-Plot latency and TPS for all network/workload combinations at 30k.
-
-Paper-style version:
-- muted, colorblind-safe palette
-- serif/STIX fonts
-- compact legends placed outside axes
-- lighter grid / thinner lines
-- panel labels instead of large in-figure title
+Plot latency and TPS for all workload/network combinations at 30k,
+grouped by workload with networks inside each group.
 """
 
 from __future__ import annotations
@@ -19,8 +13,8 @@ from pathlib import Path
 from statistics import mean, stdev
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator, StrMethodFormatter
 from matplotlib.patches import Patch
+from matplotlib.ticker import MultipleLocator, StrMethodFormatter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BENCHMARK_DIR = SCRIPT_DIR.parent.parent
@@ -32,8 +26,8 @@ from plot_certificate_progress import configure_plot_style
 
 TARGET_RATE = 30_000
 OUTPUT_PATHS = [
-    SCRIPT_DIR / "network_workload_combo_metrics_30k.pdf",
-    SCRIPT_DIR / "network_workload_combo_metrics_30k.png",
+    SCRIPT_DIR / "workload_grouped_network_metrics_30k.pdf",
+    SCRIPT_DIR / "workload_grouped_network_metrics_30k.png",
 ]
 FIXED_BATCHES = {
     ("geo_uniform", "custom-high-5"): "20260402_091731",
@@ -45,25 +39,24 @@ RUN_DIR_PATTERN = re.compile(
 TPS_PATTERN = re.compile(r"End-to-end TPS: ([\d,]+) tx/s")
 LATENCY_PATTERN = re.compile(r"End-to-end latency: ([\d,]+) ms")
 
-# Muted academic palette (paper-friendly / colorblind-aware)
 NETWORKS = [
     {
         "code": "N1",
         "label": "80ms",
         "root": Path("results/80ms"),
-        "color": "#1399B2",
+        "hatch": "",
     },
     {
         "code": "N2",
         "label": "geo",
         "root": Path("results/geo"),
-        "color": "#daeaf4",
+        "hatch": "///",
     },
     {
         "code": "N3",
         "label": "geo_uniform",
         "root": Path("results/geo_uniform"),
-        "color": "#B22222",
+        "hatch": "\\\\\\",
     },
 ]
 
@@ -72,19 +65,19 @@ WORKLOADS = [
         "code": "W1",
         "label": "balanced",
         "dir_name": "balanced",
-        "hatch": "",
+        "color": "#1399B2",
     },
     {
         "code": "W2",
         "label": "custom-high-3",
         "dir_name": "custom-high-3",
-        "hatch": "///",
+        "color": "#daeaf4",
     },
     {
         "code": "W3",
         "label": "custom-high-5",
         "dir_name": "custom-high-5",
-        "hatch": "\\\\\\",
+        "color": "#B22222",
     },
 ]
 
@@ -162,8 +155,8 @@ def _collect_points(network_label: str, workload_dir: str, workload_label: str) 
 
 def _build_rows():
     rows = []
-    for network in NETWORKS:
-        for workload in WORKLOADS:
+    for workload in WORKLOADS:
+        for network in NETWORKS:
             points = _collect_points(
                 network_label=network["label"],
                 workload_dir=workload["dir_name"],
@@ -173,13 +166,13 @@ def _build_rows():
             latency_values = [point.latency_ms for point in points]
             rows.append(
                 {
-                    "combo": f"{network['code']}+{workload['code']}",
+                    "combo": f"{workload['code']}+{network['code']}",
                     "network_code": network["code"],
                     "network_label": network["label"],
                     "workload_code": workload["code"],
                     "workload_label": workload["label"],
-                    "color": network["color"],
-                    "hatch": workload["hatch"],
+                    "color": workload["color"],
+                    "hatch": network["hatch"],
                     "runs_used": len(points),
                     "mean_tps": mean(tps_values),
                     "mean_latency_ms": mean(latency_values),
@@ -193,8 +186,6 @@ def _build_rows():
 def _set_academic_style():
     plt.rcParams.update(
         {
-            # Use matplotlib's default sans-serif academic style for
-            # titles/legends instead of Times/STIX.
             "font.family": "sans-serif",
             "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
             "mathtext.fontset": "dejavusans",
@@ -227,14 +218,14 @@ def _set_academic_style():
 def _build_positions() -> list[float]:
     positions = []
 
-    inner_gap = 0.017   # 组内间距（=柱宽，保证贴合）
-    group_gap = 0.012   # 组间间距（明显分隔）
+    inner_gap = 0.017
+    group_gap = 0.012
 
     x = 0.0
-    for _ in NETWORKS:
-        for j in range(len(WORKLOADS)):
+    for _ in WORKLOADS:
+        for j in range(len(NETWORKS)):
             positions.append(x + j * inner_gap)
-        x += len(WORKLOADS) * inner_gap + group_gap
+        x += len(NETWORKS) * inner_gap + group_gap
 
     return positions
 
@@ -242,6 +233,7 @@ def _build_positions() -> list[float]:
 def _style_axis(ax, ylabel: str, tick_format: str = "{x:,.1f}"):
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y", linestyle=(0, (2.2, 2.2)), alpha=0.28, color="#9a9a9a")
+    ax.grid(False, axis="x")
     ax.set_axisbelow(True)
     ax.yaxis.set_major_formatter(StrMethodFormatter(tick_format))
 
@@ -249,7 +241,7 @@ def _style_axis(ax, ylabel: str, tick_format: str = "{x:,.1f}"):
 def plot_combo_metrics(output_paths: list[Path]):
     rows = _build_rows()
     x_positions = _build_positions()
-    labels = [row["workload_code"] for row in rows]
+    x_labels = [row["network_code"] for row in rows]
     latency_values = [row["mean_latency_ms"] / 1000.0 for row in rows]
     tps_values = [row["mean_tps"] / 1000.0 for row in rows]
     latency_errors = [row["std_latency_ms"] / 1000.0 for row in rows]
@@ -258,7 +250,7 @@ def plot_combo_metrics(output_paths: list[Path]):
     fig, (ax_latency, ax_tps) = plt.subplots(
         2,
         1,
-        figsize=(3.8, 3.04),
+        figsize=(3.8, 3.20),
         sharex=True,
         gridspec_kw={"height_ratios": [1, 1]},
     )
@@ -302,38 +294,39 @@ def plot_combo_metrics(output_paths: list[Path]):
 
     latency_top = max(v + e for v, e in zip(latency_values, latency_errors))
     tps_top = max(v + e for v, e in zip(tps_values, tps_errors))
-    ax_latency.set_ylim(0, latency_top)
+    ax_latency.set_ylim(0, latency_top*1.1)
     ax_latency.yaxis.set_major_locator(MultipleLocator(0.5))
     ax_tps.set_ylim(0, tps_top * 1.24)
-    ax_latency.tick_params(axis="x", bottom=False, top=False)
-    ax_tps.tick_params(axis="x", bottom=False, top=False)
-    ax_tps.set_xticks([])
-    ax_tps.set_xlabel("Coupled Architecture at 30k Offered Load", labelpad=2)
 
     ax_latency.set_xlim(min(x_positions) - 0.02, max(x_positions) + 0.02)
+    ax_latency.tick_params(axis="x", bottom=False, top=False, labelbottom=False)
+    ax_tps.tick_params(axis="x", bottom=False, top=False, pad=1)
+    ax_tps.set_xticks(x_positions)
+    ax_tps.set_xticklabels(x_labels)
+    ax_tps.set_xlabel("Coupled Architecture at 30k Offered Load", labelpad=2)
 
-    network_legend = [
-        Patch(
-            facecolor=network["color"],
-            edgecolor="#2f2f2f",
-            linewidth=0.65,
-            label=network["code"],
-        )
-        for network in NETWORKS
-    ]
     workload_legend = [
         Patch(
-            facecolor="white",
+            facecolor=workload["color"],
             edgecolor="#2f2f2f",
             linewidth=0.65,
-            hatch=workload["hatch"],
             label=workload["code"],
         )
         for workload in WORKLOADS
     ]
+    network_legend = [
+        Patch(
+            facecolor="white",
+            edgecolor="#2f2f2f",
+            linewidth=0.65,
+            hatch=network["hatch"],
+            label=network["code"],
+        )
+        for network in NETWORKS
+    ]
 
     legend1 = ax_latency.legend(
-        handles=network_legend,
+        handles=workload_legend,
         loc="upper left",
         bbox_to_anchor=(0.03, 0.97),
         ncol=3,
@@ -349,7 +342,7 @@ def plot_combo_metrics(output_paths: list[Path]):
     ax_latency.add_artist(legend1)
 
     ax_latency.legend(
-        handles=workload_legend,
+        handles=network_legend,
         loc="upper right",
         bbox_to_anchor=(0.97, 0.97),
         ncol=3,
@@ -383,10 +376,10 @@ def main():
     _set_academic_style()
     rows = plot_combo_metrics(OUTPUT_PATHS)
     for output_path in OUTPUT_PATHS:
-        print(f"Saved combo metrics plot to: {output_path}")
+        print(f"Saved workload-grouped combo metrics plot to: {output_path}")
     for row in rows:
         print(
-            f"  {row['combo']}: {row['network_label']} + {row['workload_label']}, "
+            f"  {row['combo']}: {row['workload_label']} + {row['network_label']}, "
             f"runs={row['runs_used']}, mean_latency_ms={row['mean_latency_ms']:.1f}, "
             f"mean_tps={row['mean_tps']:.1f}"
         )
