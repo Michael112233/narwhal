@@ -6,7 +6,6 @@ use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
 use crate::messages::{Certificate, Header, Vote};
-use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -66,7 +65,6 @@ impl Primary {
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
     ) {
-        let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
         let (tx_parents, rx_parents) = channel(CHANNEL_CAPACITY);
         let (tx_headers, rx_headers) = channel(CHANNEL_CAPACITY);
@@ -118,7 +116,6 @@ impl Primary {
             /* handler */
             WorkerReceiverHandler {
                 tx_our_digests,
-                tx_others_digests,
             },
         );
         info!(
@@ -157,9 +154,6 @@ impl Primary {
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
         GarbageCollector::spawn(&name, &committee, consensus_round.clone(), rx_consensus);
-
-        // Receives batch digests from other workers. They are only used to validate headers.
-        PayloadReceiver::spawn(store.clone(), /* rx_workers */ rx_others_digests);
 
         // Whenever the `Synchronizer` does not manage to validate a header due to missing parent certificates of
         // batch digests, it commands the `HeaderWaiter` to synchronizer with other nodes, wait for their reply, and
@@ -248,7 +242,6 @@ impl MessageHandler for PrimaryReceiverHandler {
 #[derive(Clone)]
 struct WorkerReceiverHandler {
     tx_our_digests: Sender<(Digest, WorkerId, Vec<u8>)>,
-    tx_others_digests: Sender<(Digest, WorkerId)>,
 }
 
 #[async_trait]
@@ -265,11 +258,7 @@ impl MessageHandler for WorkerReceiverHandler {
                 .send((digest, worker_id, batch))
                 .await
                 .expect("Failed to send workers' digests"),
-            WorkerPrimaryMessage::OthersBatch(digest, worker_id, _batch) => self
-                .tx_others_digests
-                .send((digest, worker_id))
-                .await
-                .expect("Failed to send workers' digests"),
+            WorkerPrimaryMessage::OthersBatch(_, _, _) => (),
         }
         Ok(())
     }

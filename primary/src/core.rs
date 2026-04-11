@@ -138,22 +138,14 @@ impl Core {
         self.process_header(&header).await
     }
 
-    #[async_recursion]
-    async fn process_header(&mut self, header: &Header) -> DagResult<()> {
-        debug!("Processing {:?}", header);
-        // Indicate that we are processing this header.
-        self.processing
-            .entry(header.round)
-            .or_insert_with(HashSet::new)
-            .insert(header.id.clone());
-
+    async fn validate_header_parents(&mut self, header: &Header) -> DagResult<bool> {
         // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
         // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
         // reschedule processing of this header.
         let parents = self.synchronizer.get_parents(header).await?;
         if parents.is_empty() {
             debug!("Processing of {} suspended: missing parent(s)", header.id);
-            return Ok(());
+            return Ok(false);
         }
 
         // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
@@ -169,6 +161,47 @@ impl Core {
             stake >= self.committee.quorum_threshold(),
             DagError::HeaderRequiresQuorum(header.id.clone())
         );
+        Ok(true)
+    }
+
+    async fn process_certified_header(&mut self, header: &Header) -> DagResult<()> {
+        debug!("Processing certified {:?}", header);
+
+        self.processing
+            .entry(header.round)
+            .or_insert_with(HashSet::new)
+            .insert(header.id.clone());
+
+        if !self.validate_header_parents(header).await? {
+            return Ok(());
+        }
+
+        // Store the certified header as received from the certificate. A later full header with
+        // inline payload may overwrite this entry under the same header id.
+        let bytes = bincode::serialize(header).expect("Failed to serialize certified header");
+        self.store.write(header.id.to_vec(), bytes).await;
+
+        // Do not vote again for a header that is already certified.
+        self.last_voted
+            .entry(header.round)
+            .or_insert_with(HashSet::new)
+            .insert(header.author);
+
+        Ok(())
+    }
+
+    #[async_recursion]
+    async fn process_header(&mut self, header: &Header) -> DagResult<()> {
+        debug!("Processing {:?}", header);
+        // Indicate that we are processing this header.
+        self.processing
+            .entry(header.round)
+            .or_insert_with(HashSet::new)
+            .insert(header.id.clone());
+
+        if !self.validate_header_parents(header).await? {
+            return Ok(());
+        }
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
@@ -261,8 +294,13 @@ impl Core {
             .get(&certificate.header.round)
             .map_or_else(|| false, |x| x.contains(&certificate.header.id))
         {
-            // This function may still throw an error if the storage fails.
-            self.process_header(&certificate.header).await?;
+            // Certificates now only carry the vertex identity and metadata. If the full header with
+            // inline payload has not arrived yet, process the certified header without requiring payload.
+            if certificate.header.inline_payload.is_some() {
+                self.process_header(&certificate.header).await?;
+            } else {
+                self.process_certified_header(&certificate.header).await?;
+            }
         }
 
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather

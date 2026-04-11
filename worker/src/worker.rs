@@ -3,7 +3,6 @@ use crate::batch_maker::{Batch, BatchMaker, Transaction};
 use crate::helper::Helper;
 use crate::primary_connector::PrimaryConnector;
 use crate::processor::{Processor, SerializedBatchMessage};
-use crate::quorum_waiter::QuorumWaiter;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -137,7 +136,6 @@ impl Worker {
     /// Spawn all tasks responsible to handle clients transactions.
     fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>) {
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);
-        let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);
 
         // We first receive clients' transactions from the network.
@@ -152,33 +150,17 @@ impl Worker {
             /* handler */ TxReceiverHandler { tx_batch_maker },
         );
 
-        // The transactions are sent to the `BatchMaker` that assembles them into batches. It then broadcasts
-        // (in a reliable manner) the batches to all other workers that share the same `id` as us. Finally, it
-        // gathers the 'cancel handlers' of the messages and send them to the `QuorumWaiter`.
+        // The transactions are sent to the `BatchMaker` that assembles them into batches and forwards
+        // them for local processing. Payload dissemination now happens at the vertex/header layer.
         BatchMaker::spawn(
             self.parameters.batch_size,
             self.parameters.max_batch_delay,
             /* rx_transaction */ rx_batch_maker,
-            /* tx_message */ tx_quorum_waiter,
-            /* workers_addresses */
-            self.committee
-                .others_workers(&self.name, &self.id)
-                .iter()
-                .map(|(name, addresses)| (*name, addresses.worker_to_worker))
-                .collect(),
-        );
-
-        // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards
-        // the batch to the `Processor`.
-        QuorumWaiter::spawn(
-            self.committee.clone(),
-            /* stake */ self.committee.stake(&self.name),
-            /* rx_message */ rx_quorum_waiter,
             /* tx_batch */ tx_processor,
         );
 
-        // The `Processor` hashes and stores the batch. It then forwards the batch's digest to the `PrimaryConnector`
-        // that will send it to our primary machine.
+        // The `Processor` hashes and stores the batch. It then forwards the batch's digest and
+        // serialized payload to the `PrimaryConnector` that will send it to our primary machine.
         Processor::spawn(
             self.id,
             self.store.clone(),
@@ -194,9 +176,8 @@ impl Worker {
     }
 
     /// Spawn all tasks responsible to handle messages from other workers.
-    fn handle_workers_messages(&self, tx_primary: Sender<SerializedBatchDigestMessage>) {
+    fn handle_workers_messages(&self, _tx_primary: Sender<SerializedBatchDigestMessage>) {
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
-        let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);
 
         // Receive incoming messages from other workers.
         let mut address = self
@@ -210,7 +191,6 @@ impl Worker {
             /* handler */
             WorkerReceiverHandler {
                 tx_helper,
-                tx_processor,
             },
         );
 
@@ -220,16 +200,6 @@ impl Worker {
             self.committee.clone(),
             self.store.clone(),
             /* rx_request */ rx_helper,
-        );
-
-        // This `Processor` hashes and stores the batches we receive from the other workers. It then forwards the
-        // batch's digest to the `PrimaryConnector` that will send it to our primary.
-        Processor::spawn(
-            self.id,
-            self.store.clone(),
-            /* rx_batch */ rx_processor,
-            /* tx_digest */ tx_primary,
-            /* own_batch */ false,
         );
 
         info!(
@@ -264,7 +234,6 @@ impl MessageHandler for TxReceiverHandler {
 #[derive(Clone)]
 struct WorkerReceiverHandler {
     tx_helper: Sender<(Vec<Digest>, PublicKey)>,
-    tx_processor: Sender<SerializedBatchMessage>,
 }
 
 #[async_trait]
@@ -275,11 +244,7 @@ impl MessageHandler for WorkerReceiverHandler {
 
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized) {
-            Ok(WorkerMessage::Batch(..)) => self
-                .tx_processor
-                .send(serialized.to_vec())
-                .await
-                .expect("Failed to send batch"),
+            Ok(WorkerMessage::Batch(..)) => (),
             Ok(WorkerMessage::BatchRequest(missing, requestor)) => self
                 .tx_helper
                 .send((missing, requestor))

@@ -57,6 +57,16 @@ impl Synchronizer {
             return Ok(false);
         }
 
+        if let Some(inline_payload) = &header.inline_payload {
+            for (digest, worker_id) in header.payload.iter() {
+                if let Some(batch) = inline_payload.get(digest) {
+                    self.store.write(digest.to_vec(), batch.clone()).await;
+                    let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
+                    self.store.write(key.to_vec(), Vec::default()).await;
+                }
+            }
+        }
+
         let mut missing = HashMap::new();
         for (digest, worker_id) in header.payload.iter() {
             if header

@@ -256,7 +256,7 @@ async fn process_votes() {
     );
 
     // Make the certificate we expect to receive.
-    let expected = certificate(&Header::default());
+    let expected = certificate(&Header::default().without_payload());
 
     // Spawn all listeners to receive our newly formed certificate.
     let handles: Vec<_> = committee

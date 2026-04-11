@@ -39,7 +39,7 @@ impl VotesAggregator {
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures quorum is only reached once.
             return Ok(Some(Certificate {
-                header: header.clone(),
+                header: header.without_payload(),
                 votes: self.votes.clone(),
             }));
         }

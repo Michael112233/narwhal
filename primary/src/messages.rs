@@ -84,6 +84,13 @@ impl Header {
             .verify(&self.id, &self.author)
             .map_err(DagError::from)
     }
+
+    pub fn without_payload(&self) -> Self {
+        Self {
+            inline_payload: None,
+            ..self.clone()
+        }
+    }
 }
 
 impl Hash for Header {
@@ -94,13 +101,6 @@ impl Hash for Header {
         for (x, y) in &self.payload {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
-        }
-        if let Some(inline_payload) = &self.inline_payload {
-            for (digest, bytes) in inline_payload {
-                hasher.update(digest);
-                hasher.update((bytes.len() as u64).to_le_bytes());
-                hasher.update(bytes);
-            }
         }
         for x in &self.parents {
             hasher.update(x);
