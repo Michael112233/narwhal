@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-Plot latency and TPS for all workload/network combinations at 80k,
-grouped by workload with networks inside each group.
+Plot latency and TPS for workload/network combinations using selected
+consensus operating points, grouped by workload with networks inside each group.
+
+Selected offered loads:
+- 80ms: 100k
+- geo: 120k
+- geo_uniform: 100k
+
+Metric rule:
+- TPS uses the selected offered load only.
+- Latency uses the average of per-rate consensus latencies from the lowest
+  available offered load up to the selected offered load.
 """
 
 from __future__ import annotations
@@ -27,18 +37,17 @@ if not hasattr(np, "Inf"):
 
 
 OUTPUT_PATHS = [
-    SCRIPT_DIR / "workload_grouped_network_metrics_decouple_80k.pdf",
-    SCRIPT_DIR / "workload_grouped_network_metrics_decouple_80k.png",
+    SCRIPT_DIR / "workload_grouped_network_metrics_decouple_selected_loads_consensus.pdf",
+    SCRIPT_DIR / "workload_grouped_network_metrics_decouple_selected_loads_consensus.png",
 ]
 DATA_ROOT = SCRIPT_DIR.parent
-TARGET_RATE = 80_000
 FIXED_BATCHES: dict[tuple[str, str], str] = {}
 
 RUN_DIR_PATTERN = re.compile(
     r"(?:(?P<prefix>.+?)_)?(?P<timestamp>\d{8}_\d{6})_n(?P<nodes>\d+)_r(?P<rate>\d+)_run(?P<run>\d+)$"
 )
-TPS_PATTERN = re.compile(r"End-to-end TPS: ([\d,]+) tx/s")
-LATENCY_PATTERN = re.compile(r"End-to-end latency: ([\d,]+) ms")
+TPS_PATTERN = re.compile(r"Consensus TPS: ([\d,]+) tx/s")
+LATENCY_PATTERN = re.compile(r"Consensus latency: ([\d,]+) ms")
 
 NETWORKS = [
     {
@@ -46,18 +55,21 @@ NETWORKS = [
         "label": "80ms",
         "root": Path("results/80ms"),
         "hatch": "",
+        "target_rate": 100_000,
     },
     {
         "code": "N2",
         "label": "geo",
         "root": Path("results/geo"),
         "hatch": "///",
+        "target_rate": 100_000,
     },
     {
         "code": "N3",
         "label": "geo_uniform",
         "root": Path("results/geo_uniform"),
         "hatch": "\\\\\\",
+        "target_rate": 100_000,
     },
 ]
 
@@ -105,8 +117,6 @@ def _parse_summary(path: Path) -> SummaryPoint | None:
         return None
 
     rate = int(match.group("rate"))
-    if rate != TARGET_RATE:
-        return None
 
     raw = path.read_text(errors="replace")
     tps = _parse_int(TPS_PATTERN.search(raw))
@@ -124,7 +134,8 @@ def _parse_summary(path: Path) -> SummaryPoint | None:
     )
 
 
-def _collect_points(network_label: str, workload_dir: str) -> list[SummaryPoint]:
+def _collect_latest_points_by_rate(network_spec: dict, workload_dir: str) -> dict[int, list[SummaryPoint]]:
+    network_label = network_spec["label"]
     root = DATA_ROOT / network_label / workload_dir
     points = []
     for path in sorted(root.glob("**/summary.txt")):
@@ -134,31 +145,56 @@ def _collect_points(network_label: str, workload_dir: str) -> list[SummaryPoint]
 
     if not points:
         raise FileNotFoundError(
-            f"No valid {TARGET_RATE // 1000}k summaries found for {network_label}/{workload_dir}"
+            f"No valid consensus summaries found for {network_label}/{workload_dir}"
         )
 
+    grouped: dict[int, list[SummaryPoint]] = {}
+    for point in points:
+        grouped.setdefault(point.rate, []).append(point)
+
+    selected_by_rate: dict[int, list[SummaryPoint]] = {}
     fixed_timestamp = FIXED_BATCHES.get((network_label, workload_dir))
-    selected_timestamp = fixed_timestamp or max(point.timestamp for point in points)
-    selected_points = [point for point in points if point.timestamp == selected_timestamp]
-    if not selected_points:
-        raise FileNotFoundError(
-            f"No summaries matched batch {selected_timestamp} for {network_label}/{workload_dir}"
-        )
+    for rate, rate_points in grouped.items():
+        selected_timestamp = fixed_timestamp or max(point.timestamp for point in rate_points)
+        selected_points = [
+            point for point in rate_points if point.timestamp == selected_timestamp
+        ]
+        if not selected_points:
+            continue
+        selected_points.sort(key=lambda item: item.run)
+        selected_by_rate[rate] = selected_points
 
-    selected_points.sort(key=lambda item: item.run)
-    return selected_points
+    return selected_by_rate
 
 
 def _build_rows():
     rows = []
     for workload in WORKLOADS:
         for network in NETWORKS:
-            points = _collect_points(
-                network_label=network["label"],
+            points_by_rate = _collect_latest_points_by_rate(
+                network_spec=network,
                 workload_dir=workload["dir_name"],
             )
-            tps_values = [point.tps for point in points]
-            latency_values = [point.latency_ms for point in points]
+            target_rate = network["target_rate"]
+            tps_points = points_by_rate.get(target_rate, [])
+            if not tps_points:
+                raise FileNotFoundError(
+                    f"No valid {target_rate // 1000}k summaries found for "
+                    f"{network['label']}/{workload['dir_name']}"
+                )
+
+            latency_rates = sorted(rate for rate in points_by_rate if rate <= target_rate)
+            if not latency_rates:
+                raise FileNotFoundError(
+                    f"No latency summaries found up to {target_rate // 1000}k for "
+                    f"{network['label']}/{workload['dir_name']}"
+                )
+
+            tps_values = [point.tps for point in tps_points]
+            latency_rate_means = [
+                mean(point.latency_ms for point in points_by_rate[rate])
+                for rate in latency_rates
+            ]
             rows.append(
                 {
                     "combo": f"{workload['code']}+{network['code']}",
@@ -168,11 +204,15 @@ def _build_rows():
                     "workload_label": workload["label"],
                     "color": workload["color"],
                     "hatch": network["hatch"],
-                    "runs_used": len(points),
+                    "target_rate": target_rate,
+                    "runs_used": len(tps_points),
+                    "latency_rates_used": latency_rates,
                     "mean_tps": mean(tps_values),
-                    "mean_latency_ms": mean(latency_values),
+                    "mean_latency_ms": mean(latency_rate_means),
                     "std_tps": stdev(tps_values) if len(tps_values) > 1 else 0.0,
-                    "std_latency_ms": stdev(latency_values) if len(latency_values) > 1 else 0.0,
+                    "std_latency_ms": (
+                        stdev(latency_rate_means) if len(latency_rate_means) > 1 else 0.0
+                    ),
                 }
             )
     return rows
@@ -284,8 +324,8 @@ def plot_combo_metrics(output_paths: list[Path]):
             **common_kwargs,
         )
 
-    _style_axis(ax_latency, "Latency (s)")
-    _style_axis(ax_tps, "Throughput (KTps)")
+    _style_axis(ax_latency, "Consensus Latency (s, avg <= selected load)")
+    _style_axis(ax_tps, "Consensus Throughput (KTps)")
 
     latency_top = max(v + e for v, e in zip(latency_values, latency_errors))
     tps_top = max(v + e for v, e in zip(tps_values, tps_errors))
@@ -295,7 +335,10 @@ def plot_combo_metrics(output_paths: list[Path]):
     ax_tps.tick_params(axis="x", bottom=False, top=False, pad=1)
     ax_tps.set_xticks(x_positions)
     ax_tps.set_xticklabels(x_labels)
-    ax_tps.set_xlabel("Decoupled Architecture at 80k Offered Load", labelpad=2)
+    ax_tps.set_xlabel(
+        "Selected Loads: 80ms=100k, geo=120k, geo_uniform=100k; latency averaged up to selected load",
+        labelpad=2,
+    )
 
     ax_latency.set_xlim(min(x_positions) - 0.02, max(x_positions) + 0.02)
 
@@ -373,6 +416,8 @@ def main():
     for row in rows:
         print(
             f"  {row['combo']}: {row['workload_label']} + {row['network_label']}, "
+            f"target_rate={row['target_rate']}, "
+            f"latency_rates_used={[rate // 1000 for rate in row['latency_rates_used']]}k, "
             f"runs={row['runs_used']}, mean_latency_ms={row['mean_latency_ms']:.1f}, "
             f"mean_tps={row['mean_tps']:.1f}"
         )
