@@ -6,6 +6,8 @@ from benchmark.logs import ParseError, LogParser
 from benchmark.utils import Print
 from benchmark.cloudlab_instance import CloudLabInstanceManager
 from benchmark.cloudlab_remote import CloudLabBench
+from benchmark.cloudlab_wan import CloudLabWan
+from benchmark.cloudlab_lan import CloudLabLan
 from benchmark.utils import BenchError
 
 # Import AWS remote benchmark module only when needed (lazy import).
@@ -237,6 +239,44 @@ def cloudlab_install(ctx):
 
 
 @task
+def cloudlab_wan(ctx, action='setup'):
+    ''' Emulate WAN RTT between sites (tc netem). action=setup|clear '''
+    try:
+        w = CloudLabWan()
+        act = (action or 'setup').lower()
+        if act == 'setup':
+            w.setup()
+        elif act == 'clear':
+            w.clear()
+        else:
+            Print.error('cloudlab_wan: use action=setup or action=clear')
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def cloudlab_lan(ctx, prefix_len=24, cross_subnet_via='', action='setup'):
+    ''' Cross-subnet static routes on CloudLab nodes. action=setup|clear|verify. Optional cross_subnet_via=GATEWAY_IP '''
+    try:
+        via = cross_subnet_via.strip() or None
+        plen = int(prefix_len)
+        lan = CloudLabLan()
+        act = (action or 'setup').lower()
+        if act == 'clear':
+            lan.clear(prefix_len=plen, cross_subnet_via=via)
+        elif act == 'verify':
+            ok = lan.verify(prefix_len=plen)
+            if not ok:
+                raise BenchError('cloudlab_lan verify reported failures', RuntimeError('verify'))
+        elif act == 'setup':
+            lan.setup(prefix_len=plen, cross_subnet_via=via)
+        else:
+            Print.error('cloudlab_lan: use action=setup, clear, or verify')
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
 def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
     ''' Run benchmarks on CloudLab '''
     bench_params = {
@@ -244,8 +284,8 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        'rate_type': 'imbalanced',
-        'rate': [80000],
+        'rate_type': 'balanced',
+        'rate': [100000],
         'tx_size': 512,
         'duration': 120,
         'runs': 1,
@@ -255,7 +295,7 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
-        'sync_retry_nodes': 7,  # number of nodes
+        'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
         'sigma': 2,
