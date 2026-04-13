@@ -1,6 +1,6 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 from fabric import task
-
+from benchmark.cloudlab_wan import CloudLabWan
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import BenchError, Print
@@ -226,6 +226,20 @@ def cloudlab_install(ctx):
     except BenchError as e:
         Print.error(e)
 
+@task
+def cloudlab_wan(ctx, action='setup', settings_file='cloudlab_settings.json'):
+    ''' Emulate WAN RTT between sites (tc netem). action=setup|clear. Optional settings_file=... '''
+    try:
+        w = CloudLabWan(settings_file=settings_file)
+        act = (action or 'setup').lower()
+        if act == 'setup':
+            w.setup()
+        elif act == 'clear':
+            w.clear()
+        else:
+            Print.error('cloudlab_wan: use action=setup or action=clear')
+    except BenchError as e:
+        Print.error(e)
 
 @task
 def cloudlab_remote(ctx, debug=True):
