@@ -269,8 +269,19 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None, settin
             parser.origin_mapping_note = (
                 'Origin map derived from the current committee/settings files.'
             )
-        result = _annotate_summary_with_run_context(parser.result(), run_context)
-        print(result)
+        terminal_result = _annotate_summary_with_run_context(
+            parser.result(
+                include_vertex_stats=False,
+                include_origin_mapping=False,
+            ),
+            run_context,
+        )
+        print(terminal_result)
+
+        result = _annotate_summary_with_run_context(
+            parser.result(include_origin_mapping=False),
+            run_context,
+        )
 
         if save_to_file:
             _ensure_experiment_dir(run_context)

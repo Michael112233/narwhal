@@ -346,7 +346,7 @@ class LogParser:
                     latency += [end-start]
         return mean(latency) if latency else 0
 
-    def result(self):
+    def result(self, include_vertex_stats=True, include_origin_mapping=True):
         header_size = self.configs[0]['header_size']
         max_header_batches = self.configs[0]['max_header_batches']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -365,8 +365,12 @@ class LogParser:
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
-        vertex_stats_block = self._vertex_stats_summary()
-        origin_mapping_block = self._origin_mapping_summary()
+        vertex_stats_block = (
+            self._vertex_stats_summary() if include_vertex_stats else ''
+        )
+        origin_mapping_block = (
+            self._origin_mapping_summary() if include_origin_mapping else ''
+        )
 
         return (
             '\n'

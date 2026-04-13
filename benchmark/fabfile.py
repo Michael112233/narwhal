@@ -78,7 +78,7 @@ def _cloudlab_bench_params():
         # 'rate_type': 'custom',
         # 'percentages': [ 6, 6, 6, 6, 1, 1, 6, 6, 1, 1],
         # 'percentages': [0,0,0,0,10,10,10,1,1,1],
-        'rate': [10000,20000,30000,40000,50000],
+        'rate': [40000, 60000,80000,100000,120000,140000],
         # 'rate': [10000,20000,30000],
         # 'extra_rate': 15000,
         'tx_size': 512,
@@ -94,13 +94,13 @@ def _cloudlab_node_params():
     return {
         'header_size': 1000,  # bytes, used when max_header_batches is not set
         'max_header_batches': _fair_header_batches(),  # fair comparison mode
-        'max_header_delay': 3,  # ms
+        'max_header_delay': 50,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
         'sync_retry_nodes': 7,  # number of nodes
         'batch_size': 500000,  # bytes
-        'max_batch_delay': 5,  # ms
-        's':3
+        'max_batch_delay': 50,  # ms
+        # 's':3
     }
 
 
