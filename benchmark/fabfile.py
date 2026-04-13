@@ -251,8 +251,8 @@ def cloudlab_remote(ctx, debug=True):
         'collocate': True,
         'rate_type': 'balanced',
         # 'rate_type': 'custom',
-        # 'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6],
-        # 'percentages': [1, 1, 1, 1, 30, 30, 30, 30, 30, 30],
+        # 'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6], # custom-high-3
+        # 'percentages': [1, 1, 1, 1, 30, 30, 30, 30, 30, 30], # custom-high-5
         # 'percentages': [6, 6, 6, 6, 1, 1, 6, 6, 1, 1],
         # 'rate': [40000, 60000],
         'rate': [20000, 40000, 60000, 80000, 100000, 120000, 140000],
