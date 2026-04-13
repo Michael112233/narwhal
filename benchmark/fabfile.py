@@ -3,6 +3,7 @@ from fabric import task
 from pathlib import Path
 import re
 import subprocess
+from ast import literal_eval
 
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
@@ -87,6 +88,75 @@ def _cloudlab_bench_params():
         'network_tag': 'geo',
         # 'trigger_attack': [True],
     }
+
+
+def _parse_bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in ('1', 'true', 'yes', 'on'):
+        return True
+    if normalized in ('0', 'false', 'no', 'off'):
+        return False
+    raise ValueError(f'Invalid boolean value: {value}')
+
+
+def _parse_percentages_arg(percentages):
+    if percentages is None:
+        return None
+    if isinstance(percentages, list):
+        return [int(x) for x in percentages]
+
+    raw = str(percentages).strip()
+    if not raw:
+        return None
+
+    try:
+        parsed = literal_eval(raw)
+    except (ValueError, SyntaxError):
+        parsed = None
+
+    if isinstance(parsed, (list, tuple)):
+        return [int(x) for x in parsed]
+
+    return [int(part.strip()) for part in raw.split(',') if part.strip()]
+
+
+def _apply_cloudlab_bench_overrides(
+    bench_params,
+    *,
+    network_tag=None,
+    workload_tag=None,
+    rate_type=None,
+    percentages=None,
+):
+    updated = dict(bench_params)
+
+    if network_tag is not None:
+        updated['network_tag'] = str(network_tag)
+
+    if rate_type is not None:
+        updated['rate_type'] = str(rate_type)
+
+    parsed_percentages = _parse_percentages_arg(percentages)
+    if parsed_percentages is not None:
+        updated['percentages'] = parsed_percentages
+
+    active_rate_type = updated.get('rate_type')
+    if active_rate_type == 'balanced':
+        updated.pop('percentages', None)
+        updated['workload_tag'] = str(workload_tag) if workload_tag is not None else 'balanced'
+    elif active_rate_type == 'custom':
+        if workload_tag is not None:
+            updated['workload_tag'] = str(workload_tag)
+        if 'percentages' not in updated or updated['percentages'] is None:
+            raise ValueError('rate_type=custom requires percentages')
+    elif workload_tag is not None:
+        updated['workload_tag'] = str(workload_tag)
+
+    return updated
 
 
 def _cloudlab_node_params():
@@ -403,12 +473,29 @@ def cloudlab_install(ctx):
 
 # coupled experiment
 @task
-def cloudlab_remote(ctx, debug=True):
+def cloudlab_remote(
+    ctx,
+    debug=True,
+    network_tag=None,
+    workload_tag=None,
+    rate_type=None,
+    percentages=None,
+):
     ''' Run benchmarks on CloudLab '''
     bench_params = _cloudlab_bench_params()
     node_params = _cloudlab_node_params()
     try:
+        bench_params = _apply_cloudlab_bench_overrides(
+            bench_params,
+            network_tag=network_tag,
+            workload_tag=workload_tag,
+            rate_type=rate_type,
+            percentages=percentages,
+        )
+        debug = _parse_bool_arg(debug)
         _get_cloudlab_bench()(ctx).run(bench_params, node_params, debug)
+    except ValueError as e:
+        Print.error(BenchError('Invalid cloudlab_remote arguments', e))
     except BenchError as e:
         Print.error(e)
 
