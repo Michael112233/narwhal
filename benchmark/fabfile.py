@@ -7,7 +7,7 @@ import subprocess
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import BenchError, Print
-
+from benchmark.cloudlab_wan import CloudLabWan
 # Import AWS instance module only when needed (lazy import - CloudLab doesn't need it)
 try:
     from benchmark.instance import InstanceManager
@@ -77,10 +77,9 @@ def _cloudlab_bench_params():
         # 'rate_type': 'balanced',
         'rate_type': 'custom',
         'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6],
-        # 'percentages': [0,0,0,0,10,10,10,1,1,1],
-        'rate': [40000, 60000,80000,100000,120000,140000],
-        # 'rate': [10000,20000,30000],
-        # 'extra_rate': 15000,
+         # 'percentages': [1, 1, 1, 1, 6, 6, 6, 6, 6, 6], # custom-high-3
+        # 'percentages': [1, 1, 1, 1, 30, 30, 30, 30, 30, 30], # custom-high-5
+        'rate': [20000,40000, 60000,80000,100000,120000,140000],
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
