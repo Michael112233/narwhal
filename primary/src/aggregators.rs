@@ -1,72 +1,19 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, ProposalParents, Vote};
+use crate::error::DagResult;
+use crate::messages::{Header, ProposalParents};
 use crate::primary::Round;
 use config::{Committee, Stake};
-use crypto::Hash as _;
-use crypto::{Digest, PublicKey, Signature};
+use crypto::{Digest, PublicKey};
 use log::debug;
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
 
-/// Aggregates votes for a particular header into a certificate.
-pub struct VotesAggregator {
-    weight: Stake,
-    votes: Vec<(PublicKey, Signature)>,
-    used: HashSet<PublicKey>,
-}
-
-impl VotesAggregator {
-    pub fn new() -> Self {
-        Self {
-            weight: 0,
-            votes: Vec::new(),
-            used: HashSet::new(),
-        }
-    }
-
-    pub fn append(
-        &mut self,
-        vote: Vote,
-        committee: &Committee,
-        header: &Header,
-    ) -> DagResult<Option<Certificate>> {
-        let author = vote.author;
-
-        // Ensure it is the first time this authority votes.
-        ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
-
-        self.votes.push((author, vote.signature));
-        self.weight += committee.stake(&author);
-        debug!(
-            "VotesAggregator: received vote for header {} (round {}), votes in this round for this header: {} (weight={})",
-            header.id,
-            header.round,
-            self.votes.len(),
-            self.weight
-        );
-        if self.weight >= committee.quorum_threshold() {
-            self.weight = 0; // Ensures quorum is only reached once.
-            return Ok(Some(Certificate {
-                header: header.clone(),
-                votes: self.votes.clone(),
-            }));
-        }
-        Ok(None)
-    }
-}
-
-/// Aggregate certificates and check if we reach a quorum.
-pub struct CertificatesAggregator {
+/// Aggregate headers and check if we reach a quorum.
+pub struct HeadersAggregator {
     expected_round: Round,
     weight: Stake,
-    certificates: Vec<Digest>,
-    weak_certificates: Vec<Digest>,
+    seen: HashSet<Digest>,
+    headers: Vec<Digest>,
     used: HashSet<PublicKey>,
-    has_quorum: bool,
-    /// Wait for several seconds after meeting the condition
-    quorum_reached_time: Option<Instant>,
-    wait_duration: Duration,
     /// Incremental union of parents' solid-step summaries for the proposal round.
     solid_step_union: HashSet<Digest>,
     /// Incremental union of parents' solid-wave summaries for the proposal round.
@@ -76,17 +23,14 @@ pub struct CertificatesAggregator {
     last_union_set: Option<Vec<Digest>>,
 }
 
-impl CertificatesAggregator {
+impl HeadersAggregator {
     pub fn new(expected_round: Round) -> Self {
         Self {
             expected_round,
             weight: 0,
-            certificates: Vec::new(),
-            weak_certificates: Vec::new(),
+            seen: HashSet::new(),
+            headers: Vec::new(),
             used: HashSet::new(),
-            has_quorum: false,
-            quorum_reached_time: None,
-            wait_duration: Duration::from_millis(20),
             solid_step_union: HashSet::new(),
             solid_wave_union: HashSet::new(),
             last_union_set: None,
@@ -100,35 +44,37 @@ impl CertificatesAggregator {
         self.last_union_set.as_deref()
     }
 
-    fn extend_step_union(&mut self, certificate: &Certificate) {
-        if certificate.header.solid_step_vertices_merged.is_empty() {
+    fn extend_step_union(&mut self, header: &Header) {
+        if header.solid_step_vertices_merged.is_empty() {
             self.solid_step_union
-                .extend(certificate.header.solid_step_vertices.iter().cloned());
+                .extend(header.solid_step_vertices.iter().cloned());
         } else {
             self.solid_step_union
-                .extend(certificate.header.solid_step_vertices_merged.iter().cloned());
+                .extend(header.solid_step_vertices_merged.iter().cloned());
         }
     }
 
-    fn extend_wave_union(&mut self, certificate: &Certificate) {
-        if certificate.header.solid_wave_vertices_merged.is_empty() {
+    fn extend_wave_union(&mut self, header: &Header) {
+        if header.solid_wave_vertices_merged.is_empty() {
             self.solid_wave_union
-                .extend(certificate.header.solid_wave_vertices.iter().cloned());
+                .extend(header.solid_wave_vertices.iter().cloned());
         } else {
             self.solid_wave_union
-                .extend(certificate.header.solid_wave_vertices_merged.iter().cloned());
+                .extend(header.solid_wave_vertices_merged.iter().cloned());
         }
     }
 
     pub fn append(
         &mut self,
-        certificate: Certificate,
+        header: Header,
         committee: &Committee,
     ) -> DagResult<Option<ProposalParents>> {
-        let origin = certificate.origin();
+        if !self.seen.insert(header.id.clone()) {
+            return Ok(None);
+        }
 
-        // Ensure it is the first time this authority votes as a strong edge.
-        if certificate.round() == self.expected_round && !self.used.insert(origin) {
+        let origin = header.author;
+        if header.round == self.expected_round && !self.used.insert(origin) {
             return Ok(None);
         }
 
@@ -142,25 +88,23 @@ impl CertificatesAggregator {
         let regular_weak_start: Round = current_round.saturating_sub(step_index);
         let commit_weak_start: Round = current_round.saturating_sub(wave_index);
 
-        // Add the certificate to the appropriate list.
-        if certificate.round() == self.expected_round {
-            self.certificates.push(certificate.digest());
-            self.extend_step_union(&certificate);
-            self.extend_wave_union(&certificate);
+        // Add the header to the appropriate list.
+        if header.round == self.expected_round {
+            self.headers.push(header.id.clone());
+            self.extend_step_union(&header);
+            self.extend_wave_union(&header);
             self.weight += committee.stake(&origin);
-        } else if certificate.round() >= regular_weak_start
-            && certificate.round() < self.expected_round
+        } else if header.round >= regular_weak_start
+            && header.round < self.expected_round
         {
-            self.certificates.push(certificate.digest());
-            self.weak_certificates.push(certificate.digest());
-            self.extend_step_union(&certificate);
-            self.extend_wave_union(&certificate);
-        } else if certificate.round() >= commit_weak_start
-            && certificate.round() < regular_weak_start
+            self.headers.push(header.id.clone());
+            self.extend_step_union(&header);
+            self.extend_wave_union(&header);
+        } else if header.round >= commit_weak_start
+            && header.round < regular_weak_start
         {
-            self.certificates.push(certificate.digest());
-            self.weak_certificates.push(certificate.digest());
-            self.extend_wave_union(&certificate);
+            self.headers.push(header.id.clone());
+            self.extend_wave_union(&header);
         } else {
             return Ok(None);
         }
@@ -179,44 +123,29 @@ impl CertificatesAggregator {
             "Advance to round {}: require weight >= {}, solid_step={})",
             current_round, threshold, is_solid_step
         );
-        if is_solid_step {
+        let has_quorum = if is_solid_step {
             self.last_union_set = Some(self.solid_step_union.iter().cloned().collect());
-            self.has_quorum =
-                self.solid_step_union.len()
-                    >= committee.processing_threshold(current_round) as usize;
             debug!(
                 "Current round: {}, The number of merged solid-step vertices is {}",
                 current_round,
                 self.solid_step_union.len()
             );
+            self.solid_step_union.len() >= threshold as usize
         } else {
-            self.has_quorum = self.weight >= committee.processing_threshold(current_round);
             debug!(
                 "Current round: {}, The weight is {}, self_has_quorum: {}",
-                current_round, self.weight, self.has_quorum
+                current_round,
+                self.weight,
+                self.weight >= threshold
             );
-        }
-        // Modify processing condition
-        // if self.expected_round % committee.solid_step_length() as u64 == 1 && self.expected_round > 1 {
-        //     if self.certificates..solid_step_vertices.len() >= committee.processing_threshold(self.expected_round as u64) {
-        //         self.has_quorum = true;
-        //     }
-        // } else {
-        //     if self.weight >= committee.processing_threshold(self.expected_round as u64) {
-        //         self.has_quorum = true;
-        //     }
-        // }
+            self.weight >= threshold
+        };
 
-        if self.has_quorum {
-            if self.quorum_reached_time.is_none() {
-                self.quorum_reached_time = Some(Instant::now());
-            }
-            let mut proposal_parents = ProposalParents::from(self.certificates.clone());
+        if has_quorum {
+            let mut proposal_parents = ProposalParents::from(self.headers.clone());
             proposal_parents.solid_step_union = self.solid_step_union.clone();
             proposal_parents.solid_wave_union = self.solid_wave_union.clone();
-            // if self.quorum_reached_time.unwrap().elapsed() >= self.wait_duration || self.weight >= committee.max_threshold() {
             return Ok(Some(proposal_parents));
-            // }
         }
         Ok(None)
     }

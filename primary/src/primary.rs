@@ -1,11 +1,10 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::certificate_waiter::CertificateWaiter;
 use crate::core::Core;
 use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, Vote};
+use crate::messages::Header;
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -32,9 +31,7 @@ pub type Round = u64;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PrimaryMessage {
     Header(Header),
-    Vote(Vote),
-    Certificate(Certificate),
-    CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
+    HeadersRequest(Vec<Digest>, /* requestor */ PublicKey),
 }
 
 /// The messages sent by the primary to its workers.
@@ -63,19 +60,17 @@ impl Primary {
         committee: Committee,
         parameters: Parameters,
         store: Store,
-        tx_consensus: Sender<Certificate>,
-        rx_consensus: Receiver<Certificate>,
+        tx_consensus: Sender<Header>,
+        rx_consensus: Receiver<Header>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
         let (tx_parents, rx_parents) = channel(CHANNEL_CAPACITY);
         let (tx_headers, rx_headers) = channel(CHANNEL_CAPACITY);
         let (tx_sync_headers, rx_sync_headers) = channel(CHANNEL_CAPACITY);
-        let (tx_sync_certificates, rx_sync_certificates) = channel(CHANNEL_CAPACITY);
         let (tx_headers_loopback, rx_headers_loopback) = channel(CHANNEL_CAPACITY);
-        let (tx_certificates_loopback, rx_certificates_loopback) = channel(CHANNEL_CAPACITY);
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
-        let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
+        let (tx_header_requests, rx_header_requests) = channel(CHANNEL_CAPACITY);
 
         // Write the parameters to the logs.
         parameters.log();
@@ -99,7 +94,7 @@ impl Primary {
             /* handler */
             PrimaryReceiverHandler {
                 tx_primary_messages,
-                tx_cert_requests,
+                tx_header_requests,
             },
         );
         info!(
@@ -132,24 +127,21 @@ impl Primary {
             &committee,
             store.clone(),
             /* tx_header_waiter */ tx_sync_headers,
-            /* tx_certificate_waiter */ tx_sync_certificates,
         );
 
         // The `SignatureService` is used to require signatures on specific digests.
         let signature_service = SignatureService::new(secret);
 
-        // The `Core` receives and handles headers, votes, and certificates from the other primaries.
+        // The `Core` receives and handles headers from the other primaries.
         Core::spawn(
             name,
             committee.clone(),
             store.clone(),
             synchronizer,
-            signature_service.clone(),
             consensus_round.clone(),
             parameters.gc_depth,
             /* rx_primaries */ rx_primary_messages,
             /* rx_header_waiter */ rx_headers_loopback,
-            /* rx_certificate_waiter */ rx_certificates_loopback,
             /* rx_proposer */ rx_headers,
             tx_consensus,
             /* tx_proposer */ tx_parents,
@@ -161,7 +153,7 @@ impl Primary {
         // Receives batch digests from other workers. They are only used to validate headers.
         PayloadReceiver::spawn(store.clone(), /* rx_workers */ rx_others_digests);
 
-        // Whenever the `Synchronizer` does not manage to validate a header due to missing parent certificates of
+        // Whenever the `Synchronizer` does not manage to validate a header due to missing parent headers or
         // batch digests, it commands the `HeaderWaiter` to synchronizer with other nodes, wait for their reply, and
         // re-schedule execution of the header once we have all missing data.
         HeaderWaiter::spawn(
@@ -176,15 +168,7 @@ impl Primary {
             /* tx_core */ tx_headers_loopback,
         );
 
-        // The `CertificateWaiter` waits to receive all the ancestors of a certificate before looping it back to the
-        // `Core` for further processing.
-        CertificateWaiter::spawn(
-            store.clone(),
-            /* rx_synchronizer */ rx_sync_certificates,
-            /* tx_core */ tx_certificates_loopback,
-        );
-
-        // When the `Core` collects enough parent certificates, the `Proposer` generates a new header with new batch
+        // When the `Core` collects enough parent headers, the `Proposer` generates a new header with new batch
         // digests from our workers and it back to the `Core`.
         Proposer::spawn(
             name,
@@ -198,8 +182,8 @@ impl Primary {
             store.clone(),
         );
 
-        // The `Helper` is dedicated to reply to certificates requests from other primaries.
-        Helper::spawn(committee.clone(), store, rx_cert_requests);
+        // The `Helper` replies to missing-header requests from other primaries.
+        Helper::spawn(committee.clone(), store, rx_header_requests);
 
         // NOTE: This log entry is used to compute performance.
         info!(
@@ -218,7 +202,7 @@ impl Primary {
 #[derive(Clone)]
 struct PrimaryReceiverHandler {
     tx_primary_messages: Sender<PrimaryMessage>,
-    tx_cert_requests: Sender<(Vec<Digest>, PublicKey)>,
+    tx_header_requests: Sender<(Vec<Digest>, PublicKey)>,
 }
 
 #[async_trait]
@@ -229,8 +213,8 @@ impl MessageHandler for PrimaryReceiverHandler {
 
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
-            PrimaryMessage::CertificatesRequest(missing, requestor) => self
-                .tx_cert_requests
+            PrimaryMessage::HeadersRequest(missing, requestor) => self
+                .tx_header_requests
                 .send((missing, requestor))
                 .await
                 .expect("Failed to send primary message"),

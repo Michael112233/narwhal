@@ -223,7 +223,7 @@ impl HeaderWaiter {
                             waiting.push(fut);
 
                             // Ensure we didn't already sent a sync request for these parents.
-                            // Optimistically send the sync request to the node that created the certificate.
+                            // Optimistically send the sync request to the node that created the header.
                             // If this fails (after a timeout), we broadcast the sync request.
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
@@ -241,8 +241,9 @@ impl HeaderWaiter {
                                     .primary(&author)
                                     .expect("Author of valid header not in the committee")
                                     .primary_to_primary;
-                                let message = PrimaryMessage::CertificatesRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
+                                let bytes = bincode::serialize(&message)
+                                    .expect("Failed to serialize header request");
                                 self.network.send(address, Bytes::from(bytes)).await;
                             }
                         }
@@ -286,7 +287,7 @@ impl HeaderWaiter {
                     let mut retry = Vec::new();
                     for (digest, (_, timestamp)) in &self.parent_requests {
                         if timestamp + (self.sync_retry_delay as u128) < now {
-                            debug!("Requesting sync for certificate {} (retry)", digest);
+                            debug!("Requesting sync for header {} (retry)", digest);
                             retry.push(digest.clone());
                         }
                     }
@@ -296,9 +297,12 @@ impl HeaderWaiter {
                         .iter()
                         .map(|(_, x)| x.primary_to_primary)
                         .collect();
-                    let message = PrimaryMessage::CertificatesRequest(retry, self.name);
-                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                    let message = PrimaryMessage::HeadersRequest(retry, self.name);
+                    let bytes = bincode::serialize(&message)
+                        .expect("Failed to serialize header request");
+                    self.network
+                        .lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes)
+                        .await;
 
                     // Reschedule the timer.
                     timer.as_mut().reset(Instant::now() + Duration::from_millis(TIMER_RESOLUTION));

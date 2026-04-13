@@ -1,9 +1,8 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::DagResult;
 use crate::header_waiter::WaiterMessage;
-use crate::messages::{Certificate, Header};
+use crate::messages::Header;
 use config::Committee;
-use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use log::debug;
 use std::collections::HashMap;
@@ -21,10 +20,8 @@ pub struct Synchronizer {
     store: Store,
     /// Send commands to the `HeaderWaiter`.
     tx_header_waiter: Sender<WaiterMessage>,
-    /// Send commands to the `CertificateWaiter`.
-    tx_certificate_waiter: Sender<Certificate>,
     /// The genesis and its digests.
-    genesis: Vec<(Digest, Certificate)>,
+    genesis: Vec<(Digest, Header)>,
 }
 
 impl Synchronizer {
@@ -33,7 +30,6 @@ impl Synchronizer {
         committee: &Committee,
         store: Store,
         tx_header_waiter: Sender<WaiterMessage>,
-        tx_certificate_waiter: Sender<Certificate>,
     ) -> Self {
         let authorities = committee.authorities.keys().cloned().collect();
         Self {
@@ -41,10 +37,9 @@ impl Synchronizer {
             authorities,
             store,
             tx_header_waiter,
-            tx_certificate_waiter,
-            genesis: Certificate::genesis(committee)
+            genesis: Header::genesis(committee)
                 .into_iter()
-                .map(|x| (x.digest(), x))
+                .map(|header| (header.id.clone(), header))
                 .collect(),
         }
     }
@@ -91,7 +86,7 @@ impl Synchronizer {
     /// Returns the parents of a header if we have them all. If at least one parent is missing,
     /// we return an empty vector, synchronize with other nodes, and re-schedule processing
     /// of the header for when we will have all the parents.
-    pub async fn get_parents(&mut self, header: &Header) -> DagResult<Vec<Certificate>> {
+    pub async fn get_parents(&mut self, header: &Header) -> DagResult<Vec<Header>> {
         let mut missing = Vec::new();
         let mut parents = Vec::new();
         for digest in &header.parents {
@@ -106,7 +101,7 @@ impl Synchronizer {
             }
 
             match self.store.read(digest.to_vec()).await? {
-                Some(certificate) => parents.push(bincode::deserialize(&certificate)?),
+                Some(header) => parents.push(bincode::deserialize(&header)?),
                 None => missing.push(digest.clone()),
             };
         }
@@ -119,13 +114,13 @@ impl Synchronizer {
         for digest in &missing {
             // Attempt to resolve if we already have it (best-effort).
             if let Some(bytes) = self.store.read(digest.to_vec()).await? {
-                if let Ok(cert) = bincode::deserialize::<Certificate>(&bytes) {
+                if let Ok(parent) = bincode::deserialize::<Header>(&bytes) {
                     let node_id = self
                         .authorities
                         .iter()
-                        .position(|a| a == &cert.origin())
+                        .position(|a| a == &parent.author)
                         .unwrap_or(999);
-                    let weak_prefix = if cert.round() + 1 < header.round {
+                    let weak_prefix = if parent.round + 1 < header.round {
                         "w"
                     } else {
                         ""
@@ -134,7 +129,7 @@ impl Synchronizer {
                         "{} [{}{},{}]",
                         digest,
                         weak_prefix,
-                        cert.round(),
+                        parent.round,
                         node_id
                     ));
                     continue;
@@ -153,24 +148,5 @@ impl Synchronizer {
             .await
             .expect("Failed to send sync parents request");
         Ok(Vec::new())
-    }
-
-    /// Check whether we have all the ancestors of the certificate. If we don't, send the certificate to
-    /// the `CertificateWaiter` which will trigger re-processing once we have all the missing data.
-    pub async fn deliver_certificate(&mut self, certificate: &Certificate) -> DagResult<bool> {
-        for digest in &certificate.header.parents {
-            if self.genesis.iter().any(|(x, _)| x == digest) {
-                continue;
-            }
-
-            if self.store.read(digest.to_vec()).await?.is_none() {
-                self.tx_certificate_waiter
-                    .send(certificate.clone())
-                    .await
-                    .expect("Failed to send sync certificate request");
-                return Ok(false);
-            };
-        }
-        Ok(true)
     }
 }

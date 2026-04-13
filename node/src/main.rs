@@ -6,7 +6,7 @@ use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use consensus::Consensus;
 use env_logger::Env;
-use primary::{Certificate, Primary};
+use primary::{Header, Primary};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
 use worker::Worker;
@@ -88,27 +88,27 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // Make the data store.
     let store = Store::new(store_path).context("Failed to create a store")?;
 
-    // Channels the sequence of certificates.
+    // Channels the sequence of headers.
     let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
 
     // Check whether to run a primary, a worker, or an entire authority.
     match matches.subcommand() {
         // Spawn the primary and consensus core.
         ("primary", _) => {
-            let (tx_new_certificates, rx_new_certificates) = channel(CHANNEL_CAPACITY);
+            let (tx_new_headers, rx_new_headers) = channel(CHANNEL_CAPACITY);
             let (tx_feedback, rx_feedback) = channel(CHANNEL_CAPACITY);
             Primary::spawn(
                 keypair,
                 committee.clone(),
                 parameters.clone(),
                 store,
-                /* tx_consensus */ tx_new_certificates,
+                /* tx_consensus */ tx_new_headers,
                 /* rx_consensus */ rx_feedback,
             );
             Consensus::spawn(
                 committee,
                 parameters.gc_depth,
-                /* rx_primary */ rx_new_certificates,
+                /* rx_primary */ rx_new_headers,
                 /* tx_primary */ tx_feedback,
                 tx_output,
             );
@@ -133,9 +133,9 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     unreachable!();
 }
 
-/// Receives an ordered list of certificates and apply any application-specific logic.
-async fn analyze(mut rx_output: Receiver<Certificate>) {
-    while let Some(_certificate) = rx_output.recv().await {
+/// Receives an ordered list of headers and apply any application-specific logic.
+async fn analyze(mut rx_output: Receiver<Header>) {
+    while let Some(_header) = rx_output.recv().await {
         // NOTE: Here goes the application logic.
     }
 }
