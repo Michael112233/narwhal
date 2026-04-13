@@ -6,7 +6,6 @@ Run CloudLab benchmarks and post-process logs using the current run directory la
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from benchmark.logs import LogParser, ParseError
-from benchmark.origin_mapping import build_origin_mapping_from_files, mapping_payload
+from benchmark.origin_mapping import build_origin_mapping_from_files
 from benchmark.utils import PathMaker, Print
 
 try:
@@ -93,94 +92,18 @@ def _pivot_path(run_context, experiment_group=None):
     )
 
 
-def _metadata_path(run_context):
-    return Path(
-        PathMaker.metadata_file(
-            run_context['network_tag'],
-            run_context['workload_tag'],
-            run_context['run_id'],
-        )
-    )
+def _build_origin_mapping_entries(settings_file='cloudlab_settings.json'):
+    committee_path = Path(PathMaker.committee_file())
+    settings_path = Path(settings_file)
 
+    if not committee_path.exists() or not settings_path.exists():
+        return []
 
-def _committee_snapshot_path(run_context):
-    return Path(
-        PathMaker.committee_snapshot_file(
-            run_context['network_tag'],
-            run_context['workload_tag'],
-            run_context['run_id'],
-        )
-    )
-
-
-def _settings_snapshot_path(run_context):
-    return Path(
-        PathMaker.settings_snapshot_file(
-            run_context['network_tag'],
-            run_context['workload_tag'],
-            run_context['run_id'],
-        )
-    )
-
-
-def _origin_mapping_path(run_context):
-    return Path(
-        PathMaker.origin_mapping_file(
-            run_context['network_tag'],
-            run_context['workload_tag'],
-            run_context['run_id'],
-        )
-    )
-
-
-def _copy_snapshot_if_available(source_path, destination_path):
-    source = Path(source_path)
-    if not source.exists():
-        return False
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination_path)
-    return True
-
-
-def _prepare_origin_mapping_artifacts(run_context, settings_file='cloudlab_settings.json'):
-    _ensure_experiment_dir(run_context)
-
-    committee_snapshot = _committee_snapshot_path(run_context)
-    settings_snapshot = _settings_snapshot_path(run_context)
-    origin_mapping_file = _origin_mapping_path(run_context)
-
-    _copy_snapshot_if_available(PathMaker.committee_file(), committee_snapshot)
-    _copy_snapshot_if_available(settings_file, settings_snapshot)
-
-    committee_path = None
-    settings_path = None
-
-    if committee_snapshot.exists():
-        committee_path = committee_snapshot
-    elif Path(PathMaker.committee_file()).exists():
-        committee_path = Path(PathMaker.committee_file())
-
-    if settings_snapshot.exists():
-        settings_path = settings_snapshot
-    elif Path(settings_file).exists():
-        settings_path = Path(settings_file)
-
-    entries = []
-    if committee_path and settings_path:
-        try:
-            entries = build_origin_mapping_from_files(committee_path, settings_path)
-            origin_mapping_file.write_text(
-                json.dumps(mapping_payload(entries), indent=2) + '\n'
-            )
-        except Exception as e:
-            Print.warn(f'Failed to build origin mapping: {e}')
-
-    return {
-        'entries': entries,
-        'committee_path': str(committee_path) if committee_path else None,
-        'settings_path': str(settings_path) if settings_path else None,
-        'origin_mapping_path': str(origin_mapping_file) if origin_mapping_file.exists() else None,
-    }
+    try:
+        return build_origin_mapping_from_files(committee_path, settings_path)
+    except Exception as e:
+        Print.warn(f'Failed to build origin mapping: {e}')
+        return []
 
 
 def _annotate_summary_with_run_context(summary_text, run_context):
@@ -341,12 +264,10 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None, settin
 
     try:
         parser = LogParser.process(logs_dir, faults=faults)
-        origin_artifacts = _prepare_origin_mapping_artifacts(run_context, settings_file=settings_file)
-        parser.origin_mapping = origin_artifacts['entries']
+        parser.origin_mapping = _build_origin_mapping_entries(settings_file=settings_file)
         if parser.origin_mapping:
             parser.origin_mapping_note = (
-                'Origin map saved in this experiment directory as committee/settings '
-                'snapshots plus an origin_mapping JSON file.'
+                'Origin map derived from the current committee/settings files.'
             )
         result = _annotate_summary_with_run_context(parser.result(), run_context)
         print(result)
@@ -358,10 +279,6 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None, settin
             with summary_file.open('w') as handle:
                 handle.write(result)
             Print.info(f'\nResults saved to: {summary_file}')
-
-            metadata_file = _metadata_path(run_context)
-            if not metadata_file.exists():
-                metadata_file.write_text(json.dumps(run_context, indent=2) + '\n')
 
         return True
     except ParseError as e:
@@ -394,7 +311,7 @@ def generate_round_end_time_pivot(
 
     try:
         _ensure_experiment_dir(run_context)
-        origin_artifacts = _prepare_origin_mapping_artifacts(run_context, settings_file=settings_file)
+        origin_mapping = _build_origin_mapping_entries(settings_file=settings_file)
 
         if csv_filename.exists():
             csv_filename.unlink()
@@ -408,7 +325,7 @@ def generate_round_end_time_pivot(
                 str(csv_filename),
                 num_nodes,
                 logs_dir=logs_dir,
-                origin_mapping=origin_artifacts['entries'],
+                origin_mapping=origin_mapping,
             )
 
         Print.info('=' * 60)

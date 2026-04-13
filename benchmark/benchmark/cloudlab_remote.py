@@ -1803,8 +1803,6 @@ SCRIPTEOF'''
                                     node_parameters,
                                 ),
                             }
-                            metadata_file = PathMaker.metadata_file(network_tag, workload_tag, run_id)
-                            Path(metadata_file).write_text(json.dumps(run_metadata, indent=2) + '\n')
                             Path(PathMaker.run_context_file()).write_text(
                                 json.dumps(run_metadata, indent=2) + '\n'
                             )

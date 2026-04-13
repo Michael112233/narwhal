@@ -95,13 +95,6 @@ impl Hash for Header {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
         }
-        if let Some(inline_payload) = &self.inline_payload {
-            for (digest, bytes) in inline_payload {
-                hasher.update(digest);
-                hasher.update((bytes.len() as u64).to_le_bytes());
-                hasher.update(bytes);
-            }
-        }
         for x in &self.parents {
             hasher.update(x);
         }
@@ -198,6 +191,12 @@ pub struct Certificate {
 }
 
 impl Certificate {
+    pub fn new(header: &Header, votes: Vec<(PublicKey, Signature)>) -> Self {
+        let mut header = header.clone();
+        header.inline_payload = None;
+        Self { header, votes }
+    }
+
     pub fn genesis(committee: &Committee) -> Vec<Self> {
         committee
             .authorities

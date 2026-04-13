@@ -1,19 +1,15 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::quorum_waiter::QuorumWaiterMessage;
+use crate::processor::SerializedBatchMessage;
 use crate::worker::WorkerMessage;
-use bytes::Bytes;
 #[cfg(feature = "benchmark")]
 use crypto::Digest;
-use crypto::PublicKey;
 #[cfg(feature = "benchmark")]
 use ed25519_dalek::{Digest as _, Sha512};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
-use network::ReliableSender;
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
-use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -32,16 +28,12 @@ pub struct BatchMaker {
     max_batch_delay: u64,
     /// Channel to receive transactions from the network.
     rx_transaction: Receiver<Transaction>,
-    /// Output channel to deliver sealed batches to the `QuorumWaiter`.
-    tx_message: Sender<QuorumWaiterMessage>,
-    /// The network addresses of the other workers that share our worker id.
-    workers_addresses: Vec<(PublicKey, SocketAddr)>,
+    /// Output channel to deliver sealed batches to the local processor.
+    tx_message: Sender<SerializedBatchMessage>,
     /// Holds the current batch.
     current_batch: Batch,
     /// Holds the size of the current batch (in bytes).
     current_batch_size: usize,
-    /// A network sender to broadcast the batches to the other workers.
-    network: ReliableSender,
 }
 
 impl BatchMaker {
@@ -49,8 +41,7 @@ impl BatchMaker {
         batch_size: usize,
         max_batch_delay: u64,
         rx_transaction: Receiver<Transaction>,
-        tx_message: Sender<QuorumWaiterMessage>,
-        workers_addresses: Vec<(PublicKey, SocketAddr)>,
+        tx_message: Sender<SerializedBatchMessage>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -58,10 +49,8 @@ impl BatchMaker {
                 max_batch_delay,
                 rx_transaction,
                 tx_message,
-                workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                network: ReliableSender::new(),
             }
             .run()
             .await;
@@ -144,17 +133,10 @@ impl BatchMaker {
             info!("Batch {:?} contains {} B", digest, size);
         }
 
-        // Broadcast the batch through the network.
-        let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
-        let bytes = Bytes::from(serialized.clone());
-        let handlers = self.network.broadcast(addresses, bytes).await;
-
-        // Send the batch through the deliver channel for further processing.
+        // Hand the sealed batch to the local processing pipeline. Payload propagation is
+        // centralized in the primary-to-primary header broadcast via `inline_payload`.
         self.tx_message
-            .send(QuorumWaiterMessage {
-                batch: serialized,
-                handlers: names.into_iter().zip(handlers.into_iter()).collect(),
-            })
+            .send(serialized)
             .await
             .expect("Failed to deliver batch");
     }

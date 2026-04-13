@@ -71,7 +71,7 @@ class PathMaker:
 
     @staticmethod
     def results_path():
-        return 'results'
+        return 'tusk_coupled'
 
     @staticmethod
     def result_file(faults, nodes, workers, collocate, rate, tx_size):

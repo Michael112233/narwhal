@@ -156,13 +156,13 @@ pub fn votes(header: &Header) -> Vec<Vote> {
 
 // Fixture
 pub fn certificate(header: &Header) -> Certificate {
-    Certificate {
-        header: header.clone(),
-        votes: votes(&header)
+    Certificate::new(
+        header,
+        votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
             .collect(),
-    }
+    )
 }
 
 // Fixture

@@ -52,7 +52,7 @@ pub enum WorkerPrimaryMessage {
     /// The worker indicates it sealed a new batch.
     OurBatch(Digest, WorkerId, Vec<u8>),
     /// The worker indicates it received a batch's digest from another authority.
-    OthersBatch(Digest, WorkerId, Vec<u8>),
+    OthersBatch(Digest, WorkerId),
 }
 
 pub struct Primary;
@@ -265,7 +265,7 @@ impl MessageHandler for WorkerReceiverHandler {
                 .send((digest, worker_id, batch))
                 .await
                 .expect("Failed to send workers' digests"),
-            WorkerPrimaryMessage::OthersBatch(digest, worker_id, _batch) => self
+            WorkerPrimaryMessage::OthersBatch(digest, worker_id) => self
                 .tx_others_digests
                 .send((digest, worker_id))
                 .await

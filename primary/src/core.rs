@@ -250,21 +250,17 @@ impl Core {
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
         debug!("Processing {:?}", certificate);
-        debug!("Received certificate from network: round {}, origin: {}, digest: {}", certificate.round(), certificate.origin(), certificate.digest());
+        debug!(
+            "Received certificate from network: round {}, origin: {}, digest: {}",
+            certificate.round(),
+            certificate.origin(),
+            certificate.digest()
+        );
 
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
         // the data it refers to (ie. its payload and its parents) are available. We can thus continue the
         // processing of the certificate even if we don't have them in store right now.
-        if !self
-            .processing
-            .get(&certificate.header.round)
-            .map_or_else(|| false, |x| x.contains(&certificate.header.id))
-        {
-            // This function may still throw an error if the storage fails.
-            self.process_header(&certificate.header).await?;
-        }
-
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
         if !self.synchronizer.deliver_certificate(&certificate).await? {

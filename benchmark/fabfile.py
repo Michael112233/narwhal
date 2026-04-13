@@ -27,6 +27,7 @@ def _get_aws_bench():
     return Bench
 
 
+
 def _get_cloudlab_instance_manager():
     from benchmark.cloudlab_instance import CloudLabInstanceManager
     return CloudLabInstanceManager
@@ -73,9 +74,9 @@ def _cloudlab_bench_params():
         'nodes': [10],
         'workers': 1,
         'collocate': True,
-        # 'rate_type': 'imbalanced',
-        'rate_type': 'custom',
-        'percentages': [ 6, 6, 6, 6, 1, 1, 6, 6, 1, 1],
+        'rate_type': 'balanced',
+        # 'rate_type': 'custom',
+        # 'percentages': [ 6, 6, 6, 6, 1, 1, 6, 6, 1, 1],
         # 'percentages': [0,0,0,0,10,10,10,1,1,1],
         'rate': [10000,20000,30000,40000,50000],
         # 'rate': [10000,20000,30000],
@@ -83,8 +84,8 @@ def _cloudlab_bench_params():
         'tx_size': 512,
         'duration': 120,
         'runs': 2,
-        'workload_tag': 'custom-high-3opp',
-        'network_tag': 'geo_uniform',
+        'workload_tag': 'balanced',
+        'network_tag': 'geo',
         # 'trigger_attack': [True],
     }
 
@@ -159,6 +160,21 @@ def _print_vertex_stats(limit=50):
         if limit > 0 and len(rows) > limit:
             Print.info(f'... truncated {len(rows) - limit} additional vertex records for {source}')
 
+
+@task
+def cloudlab_wan(ctx, action='setup', settings_file='cloudlab_settings.json'):
+    ''' Emulate WAN RTT between sites (tc netem). action=setup|clear. Optional settings_file=... '''
+    try:
+        w = CloudLabWan(settings_file=settings_file)
+        act = (action or 'setup').lower()
+        if act == 'setup':
+            w.setup()
+        elif act == 'clear':
+            w.clear()
+        else:
+            Print.error('cloudlab_wan: use action=setup or action=clear')
+    except BenchError as e:
+        Print.error(e)
 
 @task
 def local(ctx, debug=True, duration=None):
