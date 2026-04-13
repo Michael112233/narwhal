@@ -96,14 +96,14 @@ run_workload() {
   commit_message="coupled ${network_tag} ${workload_tag}"
 
   fab_args=(
-    cloudlab_remote
-    "network_tag=${network_tag}"
-    "rate_type=${rate_type}"
-    "workload_tag=${workload_tag}"
+    cloudlab-remote
+    "--network-tag=${network_tag}"
+    "--rate-type=${rate_type}"
+    "--workload-tag=${workload_tag}"
   )
 
   if [[ "$rate_type" == "custom" ]]; then
-    fab_args+=("percentages=${percentages}")
+    fab_args+=("--percentages=${percentages}")
   fi
 
   log "Starting benchmark for network=${network_tag}, workload=${workload_tag}"

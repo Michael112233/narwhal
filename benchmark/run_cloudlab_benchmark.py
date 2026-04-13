@@ -203,7 +203,7 @@ def _annotate_summary_with_run_context(summary_text, run_context):
     )
 
 
-def run_fab_command(task='cloudlab_remote', debug=False, env=None):
+def run_fab_command(task='cloudlab-remote', debug=False, env=None):
     fab_cmd = ['fab', task]
     if debug:
         fab_cmd.append('debug=True')
@@ -359,7 +359,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument('--no-run', action='store_true', help='Skip running fab cloudlab_remote')
+    parser.add_argument('--no-run', action='store_true', help='Skip running fab cloudlab-remote')
     parser.add_argument(
         '--download-only',
         action='store_true',
