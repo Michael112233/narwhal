@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Plot balanced-workload consensus TPS-latency curves for:
-- Tusk (from benchmark/result_decouple): 80ms / no-delay / geo
+- Tusk (from benchmark/decouple): 80ms / no-delay / geo
 - Manta (from benchmark/manta_final_*): 80ms / no-delay / geo
 
 Outputs are saved under:
@@ -44,7 +44,7 @@ MANTA_RUN_DIR_PATTERN = re.compile(
 SERIES = [
     {
         "label": "Tusk 80ms",
-        "root": BENCHMARK_ROOT / "result_decouple" / "80ms" / "balanced",
+        "root": BENCHMARK_ROOT / "decouple" / "80ms" / "balanced",
         "color": "#1f77b4",
         "marker": "o",
         "linestyle": "-",
@@ -62,7 +62,7 @@ SERIES = [
     },
     {
         "label": "Tusk no-delay",
-        "root": BENCHMARK_ROOT / "result_decouple" / "no-delay" / "balanced",
+        "root": BENCHMARK_ROOT / "decouple" / "no-delay" / "balanced",
         "color": "#2ca02c",
         "marker": "o",
         "linestyle": "-",
@@ -80,7 +80,7 @@ SERIES = [
     },
     {
         "label": "Tusk geo",
-        "root": BENCHMARK_ROOT / "result_decouple" / "geo" / "balanced",
+        "root": BENCHMARK_ROOT / "decouple" / "geo" / "balanced",
         "color": "#ff7f0e",
         "marker": "^",
         "linestyle": "-",

@@ -5,7 +5,7 @@ runs at a fixed offered load.
 
 Each figure fixes one workload and compares 80ms / geo / geo_uniform.
 Outputs are saved under:
-- result_decouple/compare/cert/
+- benchmark/decouple/compare/cert/
 """
 
 from __future__ import annotations

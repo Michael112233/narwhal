@@ -300,7 +300,6 @@ def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
     # Parse log file
     round_time_info, certificate_info = parse_log_file(log_file_path)
     if not round_time_info and not certificate_info:
-        print(f"Node {node_id}: No data found, skipping...")
         return
     
     # Extract round information
@@ -313,14 +312,11 @@ def process_node_log(node_id, csv_filename, num_nodes, logs_dir='logs'):
     round_info_dict = create_round_dict(round_info)
     
     # Process certificates
-    print(f"Node {node_id}: Found {len(certificate_info)} certificate log lines")
-    matched_count = process_certificates(certificate_info, round_info, round_info_dict)
-    print(f"Node {node_id}: Successfully matched {matched_count} certificates")
+    process_certificates(certificate_info, round_info, round_info_dict)
     
     # Export to CSV
     write_header = (node_id == 0)
     export_to_csv(round_info, csv_filename, write_header)
-    print(f"Node {node_id}: CSV exported to {csv_filename}\n")
 
 
 def export_round_end_pivot_table(csv_filename, output_filename):

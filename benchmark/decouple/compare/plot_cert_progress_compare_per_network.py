@@ -4,9 +4,9 @@ Plot per-network certificate collection progress comparisons across workloads
 for decoupled runs at a fixed offered load.
 
 Outputs are saved under each network directory, for example:
-- result_decouple/80ms/cert_progress_compare_balanced_custom-high-3_custom-high-5_node0_rounds_200_350.png
-- result_decouple/geo/cert_progress_compare_balanced_custom-high-3_custom-high-5_node0_rounds_200_350.png
-- result_decouple/geo_uniform/cert_progress_compare_balanced_custom-high-3_custom-high-5_node0_rounds_200_350.png
+- benchmark/decouple/80ms/cert_progress_compare_balanced_custom-high-3_custom-high-5_node0_rounds_200_350.png
+- benchmark/decouple/geo/cert_progress_compare_balanced_custom-high-3_custom-high-5_node0_rounds_200_350.png
+- benchmark/decouple/geo_uniform/cert_progress_compare_balanced_custom-high-3_custom-high-5_node0_rounds_200_350.png
 """
 
 from __future__ import annotations

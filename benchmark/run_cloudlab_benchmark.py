@@ -3,7 +3,7 @@
 Script to run CloudLab benchmark and post-process logs.
 
 Generated artifacts are stored under:
-result_decouple/<network_tag>/<workload_tag>/<run_id>/
+benchmark/decouple/<network_tag>/<workload_tag>/<run_id>/
 """
 
 import argparse
@@ -20,7 +20,7 @@ from benchmark.logs import LogParser, ParseError
 from benchmark.utils import PathMaker, Print
 
 try:
-    from time_storage_from_logs import process_node_log, export_round_end_pivot_table
+    from time_storage_from_logs import process_node_log
 
     TIME_STORAGE_AVAILABLE = True
 except ImportError:
@@ -86,27 +86,6 @@ def _analysis_path(run_context, experiment_group=None):
             run_context['workload_tag'],
             run_context.get('run_id'),
             experiment_group=experiment_group,
-        )
-    )
-
-
-def _pivot_path(run_context, experiment_group=None):
-    return Path(
-        PathMaker.pivot_csv_file(
-            run_context['network_tag'],
-            run_context['workload_tag'],
-            run_context.get('run_id'),
-            experiment_group=experiment_group,
-        )
-    )
-
-
-def _metadata_path(run_context):
-    return Path(
-        PathMaker.metadata_file(
-            run_context['network_tag'],
-            run_context['workload_tag'],
-            run_context.get('run_id'),
         )
     )
 
@@ -185,7 +164,15 @@ def run_fab_command(task='cloudlab_remote', debug=False):
             fab_cmd,
             cwd=os.path.dirname(os.path.abspath(__file__)),
             check=False,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            stderr = (result.stderr or '').strip()
+            stdout = (result.stdout or '').strip()
+            details = stderr or stdout
+            if details:
+                Print.warn(details[-2000:])
         return result.returncode == 0
     except FileNotFoundError:
         Print.warn('fab command not found. Please install fabric: pip install fabric')
@@ -226,10 +213,6 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None):
         Print.warn(f'Logs directory not found: {logs_dir}')
         return False
 
-    Print.info('=' * 60)
-    Print.info('Processing logs...')
-    Print.info('=' * 60)
-
     try:
         parser = LogParser.process(logs_dir, faults=faults)
         result = _annotate_summary_with_run_context(parser.result(), run_context)
@@ -239,11 +222,6 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None):
             _results_dir(run_context)
             summary_file = _summary_path(run_context)
             summary_file.write_text(result)
-
-            metadata_file = _metadata_path(run_context)
-            metadata_file.write_text(json.dumps(run_context, indent=2) + '\n')
-
-            Print.info(f'\nResults saved to: {summary_file}')
 
         return True
     except ParseError as e:
@@ -255,18 +233,13 @@ def process_logs(run_context, faults=0, save_to_file=True, logs_dir=None):
         return False
 
 
-def generate_round_end_time_pivot(run_context, num_nodes=10, experiment_group=None, logs_dir=None):
+def generate_analysis_csv(run_context, num_nodes=10, experiment_group=None, logs_dir=None):
     if not TIME_STORAGE_AVAILABLE:
-        Print.warn('time_storage_from_logs module not available, skipping pivot table generation')
+        Print.warn('time_storage_from_logs module not available, skipping CSV generation')
         return False
 
     logs_dir = logs_dir or PathMaker.logs_path()
     csv_filename = _analysis_path(run_context, experiment_group=experiment_group)
-    pivot_filename = _pivot_path(run_context, experiment_group=experiment_group)
-
-    Print.info('=' * 60)
-    Print.info('Generating CSV artifacts...')
-    Print.info('=' * 60)
 
     try:
         benchmark_dir = os.path.dirname(os.path.abspath(__file__))
@@ -285,19 +258,11 @@ def generate_round_end_time_pivot(run_context, num_nodes=10, experiment_group=No
             for node_id in range(num_nodes):
                 process_node_log(node_id, str(csv_filename), num_nodes, logs_dir=logs_dir)
 
-            Print.info('=' * 60)
-            Print.info(f'Analysis complete! Results saved to: {csv_filename}')
-
-            Print.info('\nGenerating round end time pivot table...')
-            export_round_end_pivot_table(str(csv_filename), str(pivot_filename))
-
-            Print.info(f'Round end time pivot table saved to: {pivot_filename}')
-            Print.info('=' * 60)
             return True
         finally:
             os.chdir(original_cwd)
     except Exception as e:
-        Print.warn(f'Error generating CSV artifacts: {e}')
+        Print.warn(f'Error generating analysis CSV: {e}')
         return False
 
 
@@ -335,7 +300,7 @@ def main():
         '--num-nodes',
         type=int,
         default=10,
-        help='Number of nodes to process for pivot table (default: 10)',
+        help='Number of nodes to process for analysis CSV (default: 10)',
     )
     parser.add_argument(
         '--experiment-groups',
@@ -344,7 +309,11 @@ def main():
         default=None,
         help='Experiment group numbers to process (e.g., --experiment-groups 1 2 3).',
     )
-    parser.add_argument('--no-pivot', action='store_true', help='Skip generating round_end_time_pivot.csv')
+    parser.add_argument(
+        '--no-pivot',
+        action='store_true',
+        help='Deprecated; pivot generation has been removed and only analysis CSV is generated',
+    )
     parser.add_argument(
         '--logs-dir',
         default=None,
@@ -354,7 +323,6 @@ def main():
     args = parser.parse_args()
 
     Print.heading('CloudLab Benchmark Runner')
-    Print.info('=' * 60)
 
     run_context = load_run_context()
     success = True
@@ -388,35 +356,28 @@ def main():
             logs_dir=args.logs_dir,
         ) and success
 
-    if not args.no_pivot:
-        if args.experiment_groups:
-            Print.info('=' * 60)
-            Print.info(f'Processing {len(args.experiment_groups)} experiment group(s)...')
-            Print.info('=' * 60)
+    if args.experiment_groups:
+        for exp_group in args.experiment_groups:
+            exp_logs_dir = args.logs_dir
+            if exp_logs_dir is None:
+                candidate = f'logs_exp{exp_group}'
+                exp_logs_dir = candidate if os.path.exists(candidate) else None
 
-            for exp_group in args.experiment_groups:
-                Print.info(f'\nProcessing experiment group {exp_group}...')
-                exp_logs_dir = args.logs_dir
-                if exp_logs_dir is None:
-                    candidate = f'logs_exp{exp_group}'
-                    exp_logs_dir = candidate if os.path.exists(candidate) else None
-
-                exp_success = generate_round_end_time_pivot(
-                    run_context,
-                    num_nodes=args.num_nodes,
-                    experiment_group=exp_group,
-                    logs_dir=exp_logs_dir,
-                )
-                success = exp_success and success
-        else:
-            pivot_success = generate_round_end_time_pivot(
+            csv_success = generate_analysis_csv(
                 run_context,
                 num_nodes=args.num_nodes,
-                logs_dir=args.logs_dir,
+                experiment_group=exp_group,
+                logs_dir=exp_logs_dir,
             )
-            success = pivot_success and success
+            success = csv_success and success
+    else:
+        csv_success = generate_analysis_csv(
+            run_context,
+            num_nodes=args.num_nodes,
+            logs_dir=args.logs_dir,
+        )
+        success = csv_success and success
 
-    Print.info('=' * 60)
     if success:
         Print.info('✓ All operations completed successfully')
         return 0

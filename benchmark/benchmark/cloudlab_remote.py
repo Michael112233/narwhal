@@ -1056,7 +1056,7 @@ class CloudLabBench:
             result = subprocess.run(
                 [sys.executable, str(download_logs_script), '--max-workers', str(max_workers)],
                 cwd=str(benchmark_dir),
-                capture_output=False,  # Show output in real-time
+                capture_output=True,
                 text=True
             )
             
@@ -1064,6 +1064,9 @@ class CloudLabBench:
                 Print.info('✓ download_logs.py completed successfully')
             else:
                 Print.warn(f'⚠ download_logs.py exited with code {result.returncode}')
+                details = (result.stderr or result.stdout or '').strip()
+                if details:
+                    Print.warn(details[-2000:])
         except Exception as e:
             Print.warn(f'⚠ Failed to run download_logs.py: {e}')
             Print.warn('Logs may be incomplete')
@@ -1081,13 +1084,19 @@ class CloudLabBench:
                 result = subprocess.run(
                     [sys.executable, str(run_benchmark_script), '--no-run'],
                     cwd=str(benchmark_dir),
-                    capture_output=False,  # Show output in real-time
+                    capture_output=True,
                     text=True
                 )
                 if result.returncode == 0:
+                    summary = self._extract_summary(result.stdout)
+                    if summary:
+                        print(summary)
                     Print.info('✓ run_cloudlab_benchmark.py --no-run completed successfully')
                 else:
                     Print.warn(f'⚠ run_cloudlab_benchmark.py --no-run exited with code {result.returncode}')
+                    details = (result.stderr or result.stdout or '').strip()
+                    if details:
+                        Print.warn(details[-2000:])
             else:
                 Print.warn(f'⚠ run_cloudlab_benchmark.py not found at {run_benchmark_script}')
         except Exception as e:
@@ -1097,6 +1106,25 @@ class CloudLabBench:
         
         # Parse and return logs
         return LogParser.process(PathMaker.logs_path(), faults=faults)
+
+    @staticmethod
+    def _extract_summary(output):
+        if not output:
+            return ''
+
+        marker = '-----------------------------------------\n SUMMARY:\n'
+        start = output.find(marker)
+        if start == -1:
+            return ''
+
+        end = output.find('-----------------------------------------', start + len(marker))
+        if end == -1:
+            return output[start:].strip()
+
+        end = output.find('\n', end)
+        if end == -1:
+            end = len(output)
+        return output[start:end].strip()
     
     def _background_run(self, host_info, command, log_file):
         """Run a command in the background using nohup on a remote host"""
@@ -1728,20 +1756,11 @@ SCRIPTEOF'''
                             )
                             
                             # Download and parse logs
-                            result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
-                            result_file = PathMaker.result_file(
+                            self._logs(
+                                committee_copy,
                                 bench_parameters.faults,
-                                n,
-                                bench_parameters.workers,
-                                bench_parameters.collocate,
-                                rate,
-                                bench_parameters.tx_size,
-                                network_tag=network_tag,
-                                workload_tag=workload_tag,
-                                run_id=run_id,
+                                max_workers=bench_parameters.workers,
                             )
-                            Path(result_file).parent.mkdir(parents=True, exist_ok=True)
-                            result.print(result_file)
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:
                             self.kill(hosts=selected_hosts)
                             if isinstance(e, GroupException):
