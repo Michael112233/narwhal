@@ -33,20 +33,22 @@ LEGEND_EDGE_COLOR = "#cfcfcf"
 
 TPS_SERIES = [
     {
-        "label": "Low heterogeneity (80ms balanced)",
+        "label": "Low heterogeneity",
         "root": DATA_ROOT / "80ms" / "balanced",
         "summary_name": "80ms_balanced_summary.txt",
         "color": LOW_HETEROGENEITY_COLOR,
         "marker": "o",
         "annotate_dx": 8,
+        "max_rate": 120_000,
     },
     {
-        "label": "High heterogeneity (geo custom-high-5)",
+        "label": "High heterogeneity",
         "root": DATA_ROOT / "geo" / "custom-high-5",
         "summary_name": "geo_custom-high-5_summary.txt",
         "color": HIGH_HETEROGENEITY_COLOR,
         "marker": "s",
         "annotate_dx": -20,
+        "max_rate": None,
     },
 ]
 
@@ -146,6 +148,12 @@ def _collect_workload_points(root: Path, summary_name: str) -> list[SummaryPoint
     return filtered
 
 
+def _filter_points_by_rate(points: list[SummaryPoint], max_rate: int | None) -> list[SummaryPoint]:
+    if max_rate is None:
+        return points
+    return [point for point in points if point.rate <= max_rate]
+
+
 def _aggregate(points: list[SummaryPoint]):
     grouped: dict[int, list[SummaryPoint]] = {}
     for point in points:
@@ -175,6 +183,7 @@ def plot_tps_latency_comparison(output_path: Path):
 
     for spec in TPS_SERIES:
         points = _collect_workload_points(spec["root"], spec["summary_name"])
+        points = _filter_points_by_rate(points, spec.get("max_rate"))
         aggregated = _aggregate(points)
         if not aggregated:
             continue
@@ -216,7 +225,6 @@ def plot_tps_latency_comparison(output_path: Path):
     if not series_rows:
         raise ValueError("No consensus TPS-latency data found for the selected workloads.")
 
-    ax.set_title("Consensus Latency vs Throughput", fontsize=13, pad=10)
     ax.set_xlabel("Throughput (KTps)", fontsize=11)
     ax.set_ylabel("Consensus Latency (s)", fontsize=11)
     ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
