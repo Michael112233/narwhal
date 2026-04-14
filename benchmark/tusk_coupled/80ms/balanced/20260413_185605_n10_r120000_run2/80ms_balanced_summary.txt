@@ -3,6 +3,12 @@
  SUMMARY:
 -----------------------------------------
  + CONFIG:
+ Network tag: 80ms
+ Workload tag: balanced
+ Rate type: balanced
+ Workload base total rate: 120000 tx/s
+ Workload node rates (tx/s): [12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000]
+ Workload worker/client rates (tx/s): [12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000, 12000]
  Faults: 0 node(s)
  Committee size: 10 node(s)
  Worker(s) per node: 1 worker(s)
