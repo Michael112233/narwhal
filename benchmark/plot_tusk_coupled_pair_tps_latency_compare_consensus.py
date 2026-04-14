@@ -196,17 +196,13 @@ def plot_tps_latency_comparison(output_path: Path):
             s=30,
         )
 
-        ax.errorbar(
+        ax.plot(
             [row["mean_tps"] / 1000.0 for row in aggregated],
             [row["mean_latency_ms"] / 1000.0 for row in aggregated],
-            xerr=[row["std_tps"] / 1000.0 for row in aggregated],
-            yerr=[row["std_latency_ms"] / 1000.0 for row in aggregated],
-            fmt=f"-{spec['marker']}",
+            f"-{spec['marker']}",
             linewidth=2.2,
             markersize=6,
-            capsize=4,
             color=spec["color"],
-            ecolor=spec["color"],
             label=spec["label"],
         )
 
