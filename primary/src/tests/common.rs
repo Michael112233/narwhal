@@ -181,3 +181,24 @@ pub fn listener(address: SocketAddr) -> JoinHandle<Bytes> {
         }
     })
 }
+
+// Fixture
+pub fn listener_n(address: SocketAddr, messages: usize) -> JoinHandle<Vec<Bytes>> {
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(&address).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let transport = Framed::new(socket, LengthDelimitedCodec::new());
+        let (mut writer, mut reader) = transport.split();
+        let mut received = Vec::with_capacity(messages);
+        while received.len() < messages {
+            match reader.next().await {
+                Some(Ok(message)) => {
+                    writer.send(Bytes::from("Ack")).await.unwrap();
+                    received.push(message.freeze());
+                }
+                _ => panic!("Failed to receive network message"),
+            }
+        }
+        received
+    })
+}

@@ -1,7 +1,8 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
 use crate::common::{
-    certificate, committee, committee_with_base_port, header, headers, keys, listener, votes,
+    certificate, committee, committee_with_base_port, header, headers, keys, listener,
+    listener_n, votes,
 };
 use futures::future::try_join_all;
 use std::fs;
@@ -33,12 +34,12 @@ async fn process_header() {
     // Make the vote we expect to receive.
     let expected = Vote::new(&header(), &name, &mut signature_service).await;
 
-    // Spawn a listener to receive the vote.
-    let address = committee
-        .primary(&header().author)
-        .unwrap()
-        .primary_to_primary;
-    let handle = listener(address);
+    // Spawn listeners to receive the vote broadcast.
+    let handles: Vec<_> = committee
+        .others_primaries(&name)
+        .iter()
+        .map(|(_, authority)| listener(authority.primary_to_primary))
+        .collect();
 
     // Make a synchronizer for the core.
     let synchronizer = Synchronizer::new(
@@ -72,11 +73,17 @@ async fn process_header() {
         .await
         .unwrap();
 
-    // Ensure the listener correctly received the vote.
-    let received = handle.await.unwrap();
-    match bincode::deserialize(&received).unwrap() {
-        PrimaryMessage::Vote(x) => assert_eq!(x, expected),
-        x => panic!("Unexpected message: {:?}", x),
+    // Ensure every other primary received the vote broadcast.
+    for received in try_join_all(handles).await.unwrap() {
+        match bincode::deserialize(&received).unwrap() {
+            PrimaryMessage::Vote(x) => {
+                assert_eq!(x.id, expected.id);
+                assert_eq!(x.round, expected.round);
+                assert_eq!(x.origin, expected.origin);
+                assert_eq!(x.author, expected.author);
+            }
+            x => panic!("Unexpected message: {:?}", x),
+        }
     }
 
     // Ensure the header is correctly stored.
@@ -214,6 +221,7 @@ async fn process_votes() {
     let signature_service = SignatureService::new(secret);
 
     let committee = committee_with_base_port(13_100);
+    let test_header = header();
 
     let (tx_sync_headers, _rx_sync_headers) = channel(1);
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
@@ -256,28 +264,52 @@ async fn process_votes() {
     );
 
     // Make the certificate we expect to receive.
-    let expected = certificate(&Header::default());
+    let expected = certificate(&test_header);
+    let local_vote = votes(&test_header)
+        .into_iter()
+        .find(|vote| vote.author == name)
+        .unwrap();
+    let forwarded_votes: Vec<_> = votes(&test_header)
+        .into_iter()
+        .filter(|vote| vote.author != name)
+        .take(2)
+        .collect();
 
-    // Spawn all listeners to receive our newly formed certificate.
+    // Spawn all listeners to receive our vote first, then the newly formed certificate.
     let handles: Vec<_> = committee
         .others_primaries(&name)
         .iter()
-        .map(|(_, address)| listener(address.primary_to_primary))
+        .map(|(_, address)| listener_n(address.primary_to_primary, 2))
         .collect();
 
-    // Send a votes to the core.
-    for vote in votes(&Header::default()) {
+    // Send the header so votes can be aggregated by header id.
+    tx_primary_messages
+        .send(PrimaryMessage::Header(test_header.clone()))
+        .await
+        .unwrap();
+
+    // Send enough votes from other authorities to form a certificate locally.
+    for vote in forwarded_votes {
         tx_primary_messages
             .send(PrimaryMessage::Vote(vote))
             .await
             .unwrap();
     }
 
-    // Ensure all listeners got the certificate.
+    // Ensure all listeners got our vote first, and the certificate afterwards.
     for received in try_join_all(handles).await.unwrap() {
-        match bincode::deserialize(&received).unwrap() {
+        match bincode::deserialize(&received[0]).unwrap() {
+            PrimaryMessage::Vote(x) => {
+                assert_eq!(x.id, local_vote.id);
+                assert_eq!(x.round, local_vote.round);
+                assert_eq!(x.origin, local_vote.origin);
+                assert_eq!(x.author, local_vote.author);
+            }
+            x => panic!("Unexpected first message: {:?}", x),
+        }
+        match bincode::deserialize(&received[1]).unwrap() {
             PrimaryMessage::Certificate(x) => assert_eq!(x, expected),
-            x => panic!("Unexpected message: {:?}", x),
+            x => panic!("Unexpected second message: {:?}", x),
         }
     }
 }
