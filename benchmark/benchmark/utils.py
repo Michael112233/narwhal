@@ -71,7 +71,7 @@ class PathMaker:
 
     @staticmethod
     def results_path():
-        return 'decouple'
+        return 'tuskdata'
 
     @staticmethod
     def run_context_file():
