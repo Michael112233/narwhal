@@ -111,6 +111,9 @@ The file [settings.json](https://github.com/asonnino/narwhal/blob/master/benchma
         "name": "aws",
         "path": "/absolute/key/path"
     },
+    "network": {
+        "host_ip": "public"
+    },
     "port": 5000,
     "repo": {
         "name": "narwhal",
@@ -123,6 +126,23 @@ The file [settings.json](https://github.com/asonnino/narwhal/blob/master/benchma
     }
 }
 ```
+The optional `network.host_ip` field controls which address the scripts use
+to connect to EC2 instances:
+- `"public"` (default): use `PublicIpAddress`.
+- `"private"`: use `PrivateIpAddress` (requires the control machine to have
+  private network connectivity to all selected instances, e.g. same VPC / VPC peering / Transit Gateway).
+
+You can also provide an optional static inventory (`hosts`) to make `fab remote`
+behave like `fab cloudlab-remote` (explicit host list instead of EC2 tag discovery):
+```json
+"hosts": [
+    {"region": "ap-east-1", "range": "10.1.1.10-39"},
+    {"region": "us-east-2", "range": "10.2.1.10-24"},
+    {"region": "eu-central-1", "range": "10.3.1.1-5"}
+]
+```
+Each host entry can use either `"ip"` (single address) or `"range"` (`a.b.c.x-y`).
+
 The first block (`key`) contains information regarding your SSH key:
 ```json
 "key": {
