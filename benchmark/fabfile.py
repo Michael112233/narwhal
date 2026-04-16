@@ -281,7 +281,7 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
     ''' Run benchmarks on CloudLab '''
     bench_params = {
         'design_tag': 'mahi_data_forpaper',
-        'network_tag': 'geo',
+        'network_tag': 'no-delay',
         'faults': 0,
         'nodes': [10],
         'workers': 1,
