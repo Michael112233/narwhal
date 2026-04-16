@@ -287,10 +287,10 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
         'workers': 1,
         'collocate': True,
         'rate_type': 'balanced',
-        'rate': [100000],
+        'rate': [40000,60000,80000,100000,120000,140000],
         'tx_size': 512,
         'duration': 120,
-        'runs': 1,
+        'runs': 2,
     }
     node_params = {
         'header_size': 1_000,  # bytes
@@ -304,7 +304,7 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
         'kappa': 3,
         'reference': 7,
         'coverage': 7,
-        's': 0.99,
+        # 's': 0.99,
     }
     try:
         CloudLabBench(ctx).run(bench_params, node_params, debug)
