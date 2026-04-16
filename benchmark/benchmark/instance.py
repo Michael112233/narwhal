@@ -38,6 +38,11 @@ class InstanceManager:
         # Possible states are: 'pending', 'running', 'shutting-down',
         # 'terminated', 'stopping', and 'stopped'.
         ids, ips = defaultdict(list), defaultdict(list)
+        ip_field = (
+            'PrivateIpAddress'
+            if self.settings.host_ip == 'private'
+            else 'PublicIpAddress'
+        )
         for region, client in self.clients.items():
             r = client.describe_instances(
                 Filters=[
@@ -54,8 +59,8 @@ class InstanceManager:
             instances = [y for x in r['Reservations'] for y in x['Instances']]
             for x in instances:
                 ids[region] += [x['InstanceId']]
-                if 'PublicIpAddress' in x:
-                    ips[region] += [x['PublicIpAddress']]
+                if ip_field in x:
+                    ips[region] += [x[ip_field]]
         return ids, ips
 
     def _wait(self, state):
@@ -217,6 +222,15 @@ class InstanceManager:
             raise BenchError(AWSError(e))
 
     def hosts(self, flat=False):
+        # Prefer explicit hosts from settings (CloudLab-style static inventory).
+        if self.settings.hosts:
+            if flat:
+                return [x['ip'] for x in self.settings.hosts]
+            grouped = defaultdict(list)
+            for host in self.settings.hosts:
+                grouped[host['region']].append(host['ip'])
+            return grouped
+
         try:
             _, ips = self._get(['pending', 'running'])
             return [x for y in ips.values() for x in y] if flat else ips
@@ -226,6 +240,7 @@ class InstanceManager:
     def print_info(self):
         hosts = self.hosts()
         key = self.settings.key_path
+        mode = self.settings.host_ip
         text = ''
         for region, ips in hosts.items():
             text += f'\n Region: {region.upper()}\n'
@@ -237,6 +252,7 @@ class InstanceManager:
             '----------------------------------------------------------------\n'
             ' INFO:\n'
             '----------------------------------------------------------------\n'
+            f' Address mode: {mode}\n'
             f' Available machines: {sum(len(x) for x in hosts.values())}\n'
             f'{text}'
             '----------------------------------------------------------------\n'
