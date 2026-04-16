@@ -14,9 +14,11 @@ from paramiko.ssh_exception import PasswordRequiredException, SSHException
 from time import sleep
 from math import ceil
 from copy import deepcopy
+from datetime import datetime
 import subprocess
 import re
 import shlex
+import shutil
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker
@@ -82,6 +84,76 @@ class CloudLabBench:
             self.connect = ctx.connect_kwargs
         except (IOError, PasswordRequiredException, SSHException) as e:
             raise BenchError('Failed to load SSH key', e)
+
+    @staticmethod
+    def _normalize_output_tag(tag_name, tag_value):
+        """Normalize user-provided output tags into safe path segments."""
+        if tag_value is None:
+            raise BenchError(
+                f'Missing required bench parameter "{tag_name}"',
+                ValueError(tag_name)
+            )
+
+        tag = str(tag_value).strip()
+        if not tag:
+            raise BenchError(
+                f'Bench parameter "{tag_name}" cannot be empty',
+                ValueError(tag_name)
+            )
+
+        return re.sub(r'[\\/]+', '_', tag)
+
+    def _summary_path(self, design_tag, network_tag):
+        benchmark_dir = Path(__file__).parent.parent
+        output_dir = benchmark_dir / design_tag / network_tag
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    @staticmethod
+    def _summary_filename(design_tag, network_tag, nodes, rate, trigger_attack=None):
+        parts = [
+            'summary',
+            f'design-{design_tag}',
+            f'network-{network_tag}',
+            f'nodes-{nodes}',
+            f'rate-{rate}',
+        ]
+        if trigger_attack is not None:
+            parts.append(f'attack-{"on" if trigger_attack else "off"}')
+        return '-'.join(parts) + '.txt'
+
+    def _write_summary(
+        self,
+        summary_path,
+        parser,
+        design_tag,
+        network_tag,
+        nodes,
+        rate,
+        run_index,
+        total_runs,
+        trigger_attack=None
+    ):
+        attack_state = 'N/A' if trigger_attack is None else (
+            'ON' if trigger_attack else 'OFF'
+        )
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        summary = parser.result()
+
+        with open(summary_path, 'a') as f:
+            f.write('=' * 80 + '\n')
+            f.write(f'timestamp: {timestamp}\n')
+            f.write(f'design_tag: {design_tag}\n')
+            f.write(f'network_tag: {network_tag}\n')
+            f.write(f'nodes: {nodes}\n')
+            f.write(f'rate: {rate}\n')
+            f.write(f'run: {run_index}/{total_runs}\n')
+            f.write(f'attack: {attack_state}\n')
+            f.write('=' * 80 + '\n')
+            f.write(summary)
+            if not summary.endswith('\n'):
+                f.write('\n')
+            f.write('\n')
     
     def _check_stderr(self, output):
         if isinstance(output, dict):
@@ -1051,13 +1123,17 @@ class CloudLabBench:
         # Get benchmark directory (parent of benchmark/benchmark/)
         benchmark_dir = Path(__file__).parent.parent
         download_logs_script = benchmark_dir / 'download_logs.py'
+        logs_dir = benchmark_dir / PathMaker.logs_path()
+
+        # Prevent stale local logs from a previous run from polluting parsing.
+        shutil.rmtree(logs_dir, ignore_errors=True)
         
         if not download_logs_script.exists():
             Print.error(f'download_logs.py not found at {download_logs_script}')
             Print.error('Falling back to basic log download...')
             # Fallback: create logs directory and return parser
-            Path(PathMaker.logs_path()).mkdir(parents=True, exist_ok=True)
-            return LogParser.process(PathMaker.logs_path(), faults=faults)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            return LogParser.process(str(logs_dir), faults=faults)
         
         # Run download_logs.py to download all logs
         try:
@@ -1077,36 +1153,16 @@ class CloudLabBench:
         except Exception as e:
             Print.warn(f'⚠ Failed to run download_logs.py: {e}')
             Print.warn('Logs may be incomplete')
-        
-        # After downloading logs, run processing script
+
         Print.info('=' * 60)
         Print.info('Processing logs...')
         Print.info('=' * 60)
-        
+
         try:
-            run_benchmark_script = benchmark_dir / 'run_cloudlab_benchmark.py'
-            
-            if run_benchmark_script.exists():
-                Print.info('Running run_cloudlab_benchmark.py --no-run to process logs...')
-                result = subprocess.run(
-                    [sys.executable, str(run_benchmark_script), '--no-run'],
-                    cwd=str(benchmark_dir),
-                    capture_output=False,  # Show output in real-time
-                    text=True
-                )
-                if result.returncode == 0:
-                    Print.info('✓ run_cloudlab_benchmark.py --no-run completed successfully')
-                else:
-                    Print.warn(f'⚠ run_cloudlab_benchmark.py --no-run exited with code {result.returncode}')
-            else:
-                Print.warn(f'⚠ run_cloudlab_benchmark.py not found at {run_benchmark_script}')
-        except Exception as e:
-            Print.warn(f'⚠ Failed to run run_cloudlab_benchmark.py --no-run: {e}')
-        
-        Print.info('=' * 60)
-        
-        # Parse and return logs
-        return LogParser.process(PathMaker.logs_path(), faults=faults)
+            return LogParser.process(str(logs_dir), faults=faults)
+        finally:
+            # Keep downloaded logs in benchmark/logs as a unified working directory.
+            logs_dir.mkdir(parents=True, exist_ok=True)
     
     def _background_run(self, host_info, command, log_file):
         """Run a command in the background using nohup on a remote host"""
@@ -1485,6 +1541,14 @@ SCRIPTEOF'''
         """
         assert isinstance(debug, bool)
         Print.heading('Starting CloudLab benchmark')
+
+        design_tag = self._normalize_output_tag(
+            'design_tag', bench_parameters_dict.get('design_tag')
+        )
+        network_tag = self._normalize_output_tag(
+            'network_tag', bench_parameters_dict.get('network_tag')
+        )
+        summary_dir = self._summary_path(design_tag, network_tag)
         
         # Extract trigger_attack from bench_parameters_dict (optional)
         # Support both single value and list (like rate and nodes)
@@ -1500,7 +1564,10 @@ SCRIPTEOF'''
         
         # Remove trigger_attack from dict before creating BenchParameters
         # (since it's not a standard parameter)
-        bench_params_for_parsing = {k: v for k, v in bench_parameters_dict.items() if k != 'trigger_attack'}
+        bench_params_for_parsing = {
+            k: v for k, v in bench_parameters_dict.items()
+            if k not in ('trigger_attack', 'design_tag', 'network_tag')
+        }
         
         try:
             bench_parameters = BenchParameters(bench_params_for_parsing)
@@ -1554,14 +1621,24 @@ SCRIPTEOF'''
                             
                             # Download and parse logs
                             result = self._logs(committee_copy, bench_parameters.faults, max_workers=bench_parameters.workers)
-                            result.print(PathMaker.result_file(
-                                bench_parameters.faults,
+                            summary_path = summary_dir / self._summary_filename(
+                                design_tag,
+                                network_tag,
                                 n,
-                                bench_parameters.workers,
-                                bench_parameters.collocate,
                                 rate,
-                                bench_parameters.tx_size,
-                            ))
+                                trigger_attack=trigger_attack,
+                            )
+                            self._write_summary(
+                                summary_path,
+                                result,
+                                design_tag,
+                                network_tag,
+                                n,
+                                rate,
+                                run + 1,
+                                bench_parameters.runs,
+                                trigger_attack=trigger_attack,
+                            )
                         except (subprocess.SubprocessError, GroupException, ParseError) as e:
                             self.kill(hosts=selected_hosts)
                             if isinstance(e, GroupException):

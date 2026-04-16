@@ -280,6 +280,8 @@ def cloudlab_lan(ctx, prefix_len=24, cross_subnet_via='', action='setup'):
 def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
     ''' Run benchmarks on CloudLab '''
     bench_params = {
+        'design_tag': 'mahi_data_forpaper',
+        'network_tag': 'geo',
         'faults': 0,
         'nodes': [10],
         'workers': 1,
@@ -298,9 +300,9 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
         'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
-        'sigma': 2,
-        'kappa': 2,
-        'reference': 4,
+        'sigma': 1,
+        'kappa': 3,
+        'reference': 7,
         'coverage': 7,
         's': 0.99,
     }
