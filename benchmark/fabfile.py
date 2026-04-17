@@ -294,12 +294,12 @@ def cloudlab_remote(ctx, debug=False, sigma=3, kappa=2):
     }
     node_params = {
         'header_size': 1_000,  # bytes
-        'max_header_delay': 200,  # ms
+        'max_header_delay': 100,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1000,  # ms
         'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200,  # ms
+        'max_batch_delay': 50,  # ms
         'sigma': 1,
         'kappa': 3,
         'reference': 7,

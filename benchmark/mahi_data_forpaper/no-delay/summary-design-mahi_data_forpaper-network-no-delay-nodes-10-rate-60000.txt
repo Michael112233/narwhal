@@ -1,9 +1,9 @@
 ================================================================================
-timestamp: 2026-04-17 04:22:27
+timestamp: 2026-04-17 04:36:06
 design_tag: mahi_data_forpaper
 network_tag: no-delay
 nodes: 10
-rate: 40000
+rate: 60000
 run: 1/2
 attack: N/A
 ================================================================================
@@ -16,7 +16,7 @@ attack: N/A
  Committee size: 10 node(s)
  Worker(s) per node: 1 worker(s)
  Collocate primary and workers: True
- Input rate: 40,000 tx/s
+ Input rate: 60,000 tx/s
  Transaction size: 512 B
  Execution time: 121 s
 
@@ -29,21 +29,21 @@ attack: N/A
  Max batch delay: 50 ms
 
  + RESULTS:
- Consensus TPS: 39,863 tx/s
- Consensus BPS: 20,409,806 B/s
- Consensus latency: 525 ms
+ Consensus TPS: 59,816 tx/s
+ Consensus BPS: 30,626,044 B/s
+ Consensus latency: 519 ms
 
- End-to-end TPS: 39,844 tx/s
- End-to-end BPS: 20,400,348 B/s
- End-to-end latency: 606 ms
+ End-to-end TPS: 59,785 tx/s
+ End-to-end BPS: 30,609,807 B/s
+ End-to-end latency: 603 ms
 -----------------------------------------
 
 ================================================================================
-timestamp: 2026-04-17 04:28:48
+timestamp: 2026-04-17 04:42:29
 design_tag: mahi_data_forpaper
 network_tag: no-delay
 nodes: 10
-rate: 40000
+rate: 60000
 run: 2/2
 attack: N/A
 ================================================================================
@@ -56,7 +56,7 @@ attack: N/A
  Committee size: 10 node(s)
  Worker(s) per node: 1 worker(s)
  Collocate primary and workers: True
- Input rate: 40,000 tx/s
+ Input rate: 60,000 tx/s
  Transaction size: 512 B
  Execution time: 121 s
 
@@ -69,12 +69,12 @@ attack: N/A
  Max batch delay: 50 ms
 
  + RESULTS:
- Consensus TPS: 39,873 tx/s
- Consensus BPS: 20,414,963 B/s
- Consensus latency: 529 ms
+ Consensus TPS: 59,800 tx/s
+ Consensus BPS: 30,617,843 B/s
+ Consensus latency: 520 ms
 
- End-to-end TPS: 39,853 tx/s
- End-to-end BPS: 20,404,821 B/s
- End-to-end latency: 610 ms
+ End-to-end TPS: 59,774 tx/s
+ End-to-end BPS: 30,604,383 B/s
+ End-to-end latency: 604 ms
 -----------------------------------------
 

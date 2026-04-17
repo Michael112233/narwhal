@@ -154,6 +154,70 @@ class CloudLabBench:
             if not summary.endswith('\n'):
                 f.write('\n')
             f.write('\n')
+
+    @staticmethod
+    def _slim_patterns_for_log(log_name):
+        if log_name.startswith('client-'):
+            return [
+                re.compile(r'Error'),
+                re.compile(r'Transactions size: (\d+)'),
+                re.compile(r'Transactions rate: (\d+)'),
+                re.compile(r'\[(.*Z) .* Start '),
+                re.compile(r'rate too high'),
+                re.compile(r'\[(.*Z) .* sample transaction (\d+)'),
+            ]
+
+        if log_name.startswith('primary-'):
+            return [
+                re.compile(r'(?:panicked|Error)'),
+                re.compile(r'\[(.*Z) .* Created B\d+\([^ ]+\) -> ([^ ]+=)'),
+                re.compile(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)'),
+                re.compile(r'Header size .* (\d+)'),
+                re.compile(r'Max header delay .* (\d+)'),
+                re.compile(r'Garbage collection depth .* (\d+)'),
+                re.compile(r'Sync retry delay .* (\d+)'),
+                re.compile(r'Sync retry nodes .* (\d+)'),
+                re.compile(r'Batch size .* (\d+)'),
+                re.compile(r'Max batch delay .* (\d+)'),
+                re.compile(r'booted on (\d+.\d+.\d+.\d+)'),
+            ]
+
+        if log_name.startswith('worker-'):
+            return [
+                re.compile(r'(?:panic|Error)'),
+                re.compile(r'Batch ([^ ]+) contains (\d+) B'),
+                re.compile(r'Batch ([^ ]+) contains sample tx (\d+)'),
+                re.compile(r'booted on (\d+.\d+.\d+.\d+)'),
+            ]
+
+        return []
+
+    def _slim_local_logs(self, logs_dir):
+        logs_dir = Path(logs_dir)
+        slimmed = 0
+
+        for log_path in sorted(logs_dir.glob('*.log')):
+            patterns = self._slim_patterns_for_log(log_path.name)
+            if not patterns:
+                continue
+
+            try:
+                original = log_path.read_text()
+                kept_lines = [
+                    line for line in original.splitlines(keepends=True)
+                    if any(pattern.search(line) for pattern in patterns)
+                ]
+
+                # If pattern matching unexpectedly finds nothing, preserve the
+                # original file for debugging instead of destructively truncating.
+                if kept_lines:
+                    log_path.write_text(''.join(kept_lines))
+                    slimmed += 1
+            except Exception as e:
+                Print.warn(f'Failed to slim local log {log_path.name}: {e}')
+
+        if slimmed:
+            Print.info(f'Slimmed {slimmed} local log file(s) in {logs_dir}')
     
     def _check_stderr(self, output):
         if isinstance(output, dict):
@@ -1159,7 +1223,9 @@ class CloudLabBench:
         Print.info('=' * 60)
 
         try:
-            return LogParser.process(str(logs_dir), faults=faults)
+            parser = LogParser.process(str(logs_dir), faults=faults)
+            self._slim_local_logs(logs_dir)
+            return parser
         finally:
             # Keep downloaded logs in benchmark/logs as a unified working directory.
             logs_dir.mkdir(parents=True, exist_ok=True)
