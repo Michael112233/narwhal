@@ -157,21 +157,9 @@ class CloudLabBench:
 
     @staticmethod
     def _slim_patterns_for_log(log_name):
-        if log_name.startswith('client-'):
-            return [
-                re.compile(r'Error'),
-                re.compile(r'Transactions size: (\d+)'),
-                re.compile(r'Transactions rate: (\d+)'),
-                re.compile(r'\[(.*Z) .* Start '),
-                re.compile(r'rate too high'),
-                re.compile(r'\[(.*Z) .* sample transaction (\d+)'),
-            ]
-
         if log_name.startswith('primary-'):
             return [
                 re.compile(r'(?:panicked|Error)'),
-                re.compile(r'\[(.*Z) .* Created B\d+\([^ ]+\) -> ([^ ]+=)'),
-                re.compile(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)'),
                 re.compile(r'Header size .* (\d+)'),
                 re.compile(r'Max header delay .* (\d+)'),
                 re.compile(r'Garbage collection depth .* (\d+)'),
@@ -182,21 +170,22 @@ class CloudLabBench:
                 re.compile(r'booted on (\d+.\d+.\d+.\d+)'),
             ]
 
-        if log_name.startswith('worker-'):
-            return [
-                re.compile(r'(?:panic|Error)'),
-                re.compile(r'Batch ([^ ]+) contains (\d+) B'),
-                re.compile(r'Batch ([^ ]+) contains sample tx (\d+)'),
-                re.compile(r'booted on (\d+.\d+.\d+.\d+)'),
-            ]
-
         return []
 
     def _slim_local_logs(self, logs_dir):
         logs_dir = Path(logs_dir)
         slimmed = 0
+        deleted = 0
 
         for log_path in sorted(logs_dir.glob('*.log')):
+            if log_path.name.startswith('client-') or log_path.name.startswith('worker-'):
+                try:
+                    log_path.unlink()
+                    deleted += 1
+                except Exception as e:
+                    Print.warn(f'Failed to delete local log {log_path.name}: {e}')
+                continue
+
             patterns = self._slim_patterns_for_log(log_path.name)
             if not patterns:
                 continue
@@ -216,8 +205,11 @@ class CloudLabBench:
             except Exception as e:
                 Print.warn(f'Failed to slim local log {log_path.name}: {e}')
 
-        if slimmed:
-            Print.info(f'Slimmed {slimmed} local log file(s) in {logs_dir}')
+        if slimmed or deleted:
+            Print.info(
+                f'Slimmed {slimmed} primary log file(s) and deleted '
+                f'{deleted} client/worker log file(s) in {logs_dir}'
+            )
     
     def _check_stderr(self, output):
         if isinstance(output, dict):

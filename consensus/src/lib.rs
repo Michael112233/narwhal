@@ -230,8 +230,11 @@ impl Consensus {
             // Add the new header to the local storage.
             state.insert(header);
 
-            // Emit DAG visualization for extract_final_dag / extract_dag_out (full DAG per round).
-            self.visualize_dag(&state, round);
+            // DAG visualization is extremely verbose; keep it disabled unless
+            // explicitly requested for debugging / offline extraction.
+            if std::env::var("MAHI_LOG_DAG").ok().as_deref() == Some("1") {
+                self.visualize_dag(&state, round);
+            }
 
             let wave_length = self.committee.solid_wave_length();
             let r = round - 1;
