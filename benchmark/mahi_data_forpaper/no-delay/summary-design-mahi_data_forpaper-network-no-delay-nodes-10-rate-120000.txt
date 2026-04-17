@@ -1,0 +1,80 @@
+================================================================================
+timestamp: 2026-04-17 05:21:58
+design_tag: mahi_data_forpaper
+network_tag: no-delay
+nodes: 10
+rate: 120000
+run: 1/2
+attack: N/A
+================================================================================
+
+-----------------------------------------
+ SUMMARY:
+-----------------------------------------
+ + CONFIG:
+ Faults: 0 node(s)
+ Committee size: 10 node(s)
+ Worker(s) per node: 1 worker(s)
+ Collocate primary and workers: True
+ Input rate: 120,000 tx/s
+ Transaction size: 512 B
+ Execution time: 85 s
+
+ Header size: 1,000 B
+ Max header delay: 100 ms
+ GC depth: 50 round(s)
+ Sync retry delay: 1,000 ms
+ Sync retry nodes: 4 node(s)
+ batch size: 500,000 B
+ Max batch delay: 50 ms
+
+ + RESULTS:
+ Consensus TPS: 111,429 tx/s
+ Consensus BPS: 57,051,507 B/s
+ Consensus latency: 1,887 ms
+
+ End-to-end TPS: 111,370 tx/s
+ End-to-end BPS: 57,021,329 B/s
+ End-to-end latency: 2,112 ms
+-----------------------------------------
+
+================================================================================
+timestamp: 2026-04-17 05:25:04
+design_tag: mahi_data_forpaper
+network_tag: no-delay
+nodes: 10
+rate: 120000
+run: 2/2
+attack: N/A
+================================================================================
+
+-----------------------------------------
+ SUMMARY:
+-----------------------------------------
+ + CONFIG:
+ Faults: 0 node(s)
+ Committee size: 10 node(s)
+ Worker(s) per node: 1 worker(s)
+ Collocate primary and workers: True
+ Input rate: 120,000 tx/s
+ Transaction size: 512 B
+ Execution time: 113 s
+
+ Header size: 1,000 B
+ Max header delay: 100 ms
+ GC depth: 50 round(s)
+ Sync retry delay: 1,000 ms
+ Sync retry nodes: 4 node(s)
+ batch size: 500,000 B
+ Max batch delay: 50 ms
+
+ + RESULTS:
+ Consensus TPS: 100,207 tx/s
+ Consensus BPS: 51,305,870 B/s
+ Consensus latency: 3,970 ms
+
+ End-to-end TPS: 100,141 tx/s
+ End-to-end BPS: 51,272,142 B/s
+ End-to-end latency: 4,270 ms
+-----------------------------------------
+
