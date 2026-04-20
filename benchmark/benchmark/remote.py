@@ -70,13 +70,14 @@ class Bench:
             # This is missing from the Rocksdb installer (needed for Rocksdb).
             'sudo apt-get install -y clang',
 
-            # Clone the repo.
-            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))'
+            # Clone into directory matching repo.name (must match _update / compile paths).
+            f'(git clone {self.settings.repo_url} {self.settings.repo_name} '
+            f'|| (cd {self.settings.repo_name} && git pull))'
         ]
         hosts = self.manager.hosts(flat=True)
         try:
             g = Group(*hosts, user='ubuntu', connect_kwargs=self.connect)
-            g.run(' && '.join(cmd), hide=True)
+            g.run('cd $HOME && ' + ' && '.join(cmd), hide=True)
             Print.heading(f'Initialized testbed of {len(hosts)} nodes')
         except (GroupException, ExecutionError) as e:
             e = FabricError(e) if isinstance(e, GroupException) else e
@@ -131,7 +132,8 @@ class Bench:
 
     def _background_run(self, host, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f'tmux new -d -s "{name}" "{command} |& tee {log_file}"'
+        # tmux default cwd may not be $HOME; ./node and ./benchmark_client live there after alias_binaries.
+        cmd = f'tmux new -d -s "{name}" "cd $HOME && {command} |& tee {log_file}"'
         c = Connection(host, user='ubuntu', connect_kwargs=self.connect)
         output = c.run(cmd, hide=True)
         self._check_stderr(output)
@@ -156,7 +158,7 @@ class Bench:
             )
         ]
         g = Group(*ips, user='ubuntu', connect_kwargs=self.connect)
-        g.run(' && '.join(cmd), hide=True)
+        g.run('cd $HOME && ' + ' && '.join(cmd), hide=True)
 
     def _config(self, hosts, node_parameters, bench_parameters):
         Print.info('Generating configuration files...')
@@ -192,7 +194,15 @@ class Bench:
             addresses = OrderedDict(
                 (x, y) for x, y in zip(names, hosts)
             )
-        committee = Committee(addresses, self.settings.base_port)
+        jp = node_parameters.json
+        committee = Committee(
+            addresses,
+            self.settings.base_port,
+            int(jp.get('sigma', 1)),
+            int(jp.get('kappa', 3)),
+            int(jp.get('reference', 7)),
+            int(jp.get('coverage', 7)),
+        )
         committee.print(PathMaker.committee_file())
 
         node_parameters.print(PathMaker.parameters_file())
