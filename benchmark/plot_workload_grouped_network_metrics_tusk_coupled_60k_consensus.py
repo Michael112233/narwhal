@@ -162,8 +162,8 @@ def _set_academic_style():
             "font.size": 9,
             "axes.labelsize": 9,
             "axes.titlesize": 9,
-            "xtick.labelsize": 5.5,
-            "ytick.labelsize": 5.5,
+            "xtick.labelsize": 8.5,
+            "ytick.labelsize": 8.5,
             "legend.fontsize": 6.5,
             "legend.title_fontsize": 6.5,
             "axes.spines.top": True,
@@ -327,9 +327,9 @@ def plot_combo_metrics(output_paths: list[Path]):
     output_paths[0].parent.mkdir(parents=True, exist_ok=True)
     fig.subplots_adjust(
         hspace=0.10,
-        bottom=0.19,
+        bottom=0.22,
         top=0.95,
-        left=0.13,
+        left=0.16,
         right=0.98,
     )
     for output_path in output_paths:

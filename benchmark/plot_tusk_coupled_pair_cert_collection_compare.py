@@ -52,12 +52,12 @@ def configure_plot_style():
             continue
     plt.rcParams.update(
         {
-            "font.size": 11,
-            "axes.titlesize": 13,
-            "axes.labelsize": 11,
-            "legend.fontsize": 10,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
+            "font.size": 20,
+            "axes.titlesize": 16,
+            "axes.labelsize": 18,
+            "legend.fontsize": 14,
+            "xtick.labelsize": 18,
+            "ytick.labelsize": 18,
         }
     )
 
@@ -132,6 +132,7 @@ def _build_progress_series(target_rate: int):
             "label": "Low heterogeneity",
             "color": LOW_HETEROGENEITY_COLOR,
             "marker": "o",
+            "linestyle": "-",
             "csv_paths": [
                 DATA_ROOT
                 / "80ms"
@@ -149,6 +150,7 @@ def _build_progress_series(target_rate: int):
             "label": "High heterogeneity",
             "color": HIGH_HETEROGENEITY_COLOR,
             "marker": "s",
+            "linestyle": "--",
             "csv_paths": [
                 DATA_ROOT
                 / "geo"
@@ -196,6 +198,7 @@ def _compute_progress_curve(spec):
         "label": spec["label"],
         "color": spec["color"],
         "marker": spec["marker"],
+        "linestyle": spec["linestyle"],
         "progress": list(range(1, common_rank_count + 1)),
         "progress_pct": [
             100.0 * (index + 1) / TOTAL_VERTICES for index in range(common_rank_count)
@@ -220,10 +223,13 @@ def plot_progress_comparison(output_path: Path, target_rate: int):
         ax.plot(
             curve["averages"],
             curve["progress_pct"],
+            linestyle=curve["linestyle"],
             marker=curve["marker"],
             linewidth=2.2,
             markersize=5.5,
             color=curve["color"],
+            markerfacecolor="white",
+            markeredgewidth=1.1,
             label=curve["label"],
         )
 
@@ -258,19 +264,19 @@ def plot_progress_comparison(output_path: Path, target_rate: int):
         "Prolonged round",
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=12,
         color=ANNOTATION_TEXT_COLOR,
     )
 
-    ax.set_xlabel("Time (ms)", fontsize=11)
-    ax.set_ylabel("Collected vertices (%)", fontsize=11)
+    ax.set_xlabel("Time (ms)", fontsize=20)
+    ax.set_ylabel("Collected vertices (%)", fontsize=20)
     ax.set_ylim(0, 104)
     ax.set_yticks(range(10, 101, 10))
     ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
     ax.grid(True, axis="both", linestyle=(0, (2.2, 2.2)), alpha=0.28, color=GRID_COLOR)
     ax.tick_params(direction="in", top=True, right=True)
-    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=10)
+    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=14)
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color(FRAME_COLOR)
