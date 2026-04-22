@@ -55,9 +55,9 @@ def configure_plot_style():
             "font.size": 20,
             "axes.titlesize": 33,
             "axes.labelsize": 33,
-            "legend.fontsize": 25,
-            "xtick.labelsize": 23,
-            "ytick.labelsize": 23,
+            "legend.fontsize": 26,
+            "xtick.labelsize": 30,
+            "ytick.labelsize": 30,
         }
     )
 
@@ -65,8 +65,8 @@ def configure_plot_style():
 def _save_figure_png_and_pdf(fig, output_path: Path):
     png_path = output_path.with_suffix(".png")
     pdf_path = output_path.with_suffix(".pdf")
-    fig.savefig(png_path, dpi=220, bbox_inches="tight")
-    fig.savefig(pdf_path, bbox_inches="tight")
+    fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.12)
+    fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0.12)
     return png_path, pdf_path
 
 
@@ -264,24 +264,31 @@ def plot_progress_comparison(output_path: Path, target_rate: int):
         "Prolonged round",
         ha="center",
         va="bottom",
-        fontsize=12,
+        fontsize=15,
         color=ANNOTATION_TEXT_COLOR,
     )
 
-    ax.set_xlabel("Time (ms)", fontsize=28)
-    ax.set_ylabel("Collected vertices (%)", fontsize=28)
+    ax.set_xlabel("Time (ms)", fontsize=30)
+    ax.set_ylabel("Collected vertices (%)", fontsize=30)
     ax.set_ylim(0, 104)
-    ax.set_yticks(range(10, 101, 10))
+    ax.set_yticks(range(0, 101, 20))
     ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
     ax.grid(True, axis="both", linestyle=(0, (2.2, 2.2)), alpha=0.28, color=GRID_COLOR)
     ax.tick_params(direction="in", top=True, right=True)
-    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=23)
+    ax.legend(
+        loc="lower right",
+        frameon=True,
+        facecolor="white",
+        edgecolor=LEGEND_EDGE_COLOR,
+        fontsize=25,
+    )
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color(FRAME_COLOR)
         spine.set_linewidth(0.9)
     fig.tight_layout()
+
     saved_paths = _save_figure_png_and_pdf(fig, output_path)
     plt.close(fig)
 

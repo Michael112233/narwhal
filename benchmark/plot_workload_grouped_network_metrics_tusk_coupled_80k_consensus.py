@@ -23,10 +23,10 @@ if not hasattr(np, "Inf"):
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_ROOT = SCRIPT_DIR / "tusk_coupled"
 OUTPUT_PATHS = [
-    DATA_ROOT / "consensus" / "workload_grouped_network_metrics_tusk_coupled_80k_consensus.pdf",
-    DATA_ROOT / "consensus" / "workload_grouped_network_metrics_tusk_coupled_80k_consensus.png",
+    DATA_ROOT / "consensus" / "workload_grouped_network_metrics_tusk_coupled_100k_consensus.pdf",
+    DATA_ROOT / "consensus" / "workload_grouped_network_metrics_tusk_coupled_100k_consensus.png",
 ]
-TARGET_RATE = 80_000
+TARGET_RATE = 100_000
 
 RUN_DIR_PATTERN = re.compile(
     r"(?P<timestamp>\d{8}_\d{6})_n(?P<nodes>\d+)_r(?P<rate>\d+)_run(?P<run>\d+)$"

@@ -15,7 +15,7 @@ from statistics import mean, stdev
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import StrMethodFormatter
+from matplotlib.ticker import MaxNLocator, StrMethodFormatter
 
 # Compatibility shim for older matplotlib on NumPy 2.x.
 if not hasattr(np, "Inf"):
@@ -83,9 +83,9 @@ def configure_plot_style():
             "font.size": 20,
             "axes.titlesize": 33,
             "axes.labelsize": 33,
-            "legend.fontsize": 25,
-            "xtick.labelsize": 25,
-            "ytick.labelsize": 25,
+            "legend.fontsize": 26,
+            "xtick.labelsize": 30,
+            "ytick.labelsize": 30,
         }
     )
 
@@ -208,13 +208,15 @@ def plot_tps_latency_comparison(output_path: Path):
     if not series_rows:
         raise ValueError("No consensus TPS-latency data found for the selected workloads.")
 
-    ax.set_xlabel("Throughput (KTps)", fontsize=28)
-    ax.set_ylabel("Latency (s)", fontsize=28)
+    ax.set_xlabel("Throughput (KTps)", fontsize=30)
+    ax.set_ylabel("Latency (s)", fontsize=30)
+    ax.set_ylim(bottom=1)
     ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
-    ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.1f}"))
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
     ax.grid(True, axis="both", linestyle=(0, (2.2, 2.2)), alpha=0.28, color=GRID_COLOR)
     ax.tick_params(direction="in", top=True, right=True)
-    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=23)
+    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=25)
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color(FRAME_COLOR)
