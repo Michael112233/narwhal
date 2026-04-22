@@ -53,11 +53,11 @@ def configure_plot_style():
     plt.rcParams.update(
         {
             "font.size": 20,
-            "axes.titlesize": 16,
-            "axes.labelsize": 18,
-            "legend.fontsize": 14,
-            "xtick.labelsize": 18,
-            "ytick.labelsize": 18,
+            "axes.titlesize": 33,
+            "axes.labelsize": 33,
+            "legend.fontsize": 25,
+            "xtick.labelsize": 23,
+            "ytick.labelsize": 23,
         }
     )
 
@@ -268,15 +268,15 @@ def plot_progress_comparison(output_path: Path, target_rate: int):
         color=ANNOTATION_TEXT_COLOR,
     )
 
-    ax.set_xlabel("Time (ms)", fontsize=20)
-    ax.set_ylabel("Collected vertices (%)", fontsize=20)
+    ax.set_xlabel("Time (ms)", fontsize=28)
+    ax.set_ylabel("Collected vertices (%)", fontsize=28)
     ax.set_ylim(0, 104)
     ax.set_yticks(range(10, 101, 10))
     ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
     ax.grid(True, axis="both", linestyle=(0, (2.2, 2.2)), alpha=0.28, color=GRID_COLOR)
     ax.tick_params(direction="in", top=True, right=True)
-    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=14)
+    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=23)
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color(FRAME_COLOR)

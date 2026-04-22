@@ -81,11 +81,11 @@ def configure_plot_style():
     plt.rcParams.update(
         {
             "font.size": 20,
-            "axes.titlesize": 16,
-            "axes.labelsize": 18,
-            "legend.fontsize": 14,
-            "xtick.labelsize": 18,
-            "ytick.labelsize": 18,
+            "axes.titlesize": 33,
+            "axes.labelsize": 33,
+            "legend.fontsize": 25,
+            "xtick.labelsize": 25,
+            "ytick.labelsize": 25,
         }
     )
 
@@ -208,13 +208,13 @@ def plot_tps_latency_comparison(output_path: Path):
     if not series_rows:
         raise ValueError("No consensus TPS-latency data found for the selected workloads.")
 
-    ax.set_xlabel("Throughput (KTps)", fontsize=20)
-    ax.set_ylabel("Latency (s)", fontsize=20)
+    ax.set_xlabel("Throughput (KTps)", fontsize=28)
+    ax.set_ylabel("Latency (s)", fontsize=28)
     ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.1f}"))
     ax.grid(True, axis="both", linestyle=(0, (2.2, 2.2)), alpha=0.28, color=GRID_COLOR)
     ax.tick_params(direction="in", top=True, right=True)
-    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=14)
+    ax.legend(frameon=True, facecolor="white", edgecolor=LEGEND_EDGE_COLOR, fontsize=23)
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color(FRAME_COLOR)
