@@ -13,7 +13,7 @@ from statistics import mean, stdev
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from matplotlib.ticker import StrMethodFormatter
+from matplotlib.ticker import FuncFormatter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_ROOT = SCRIPT_DIR.parent
@@ -159,11 +159,11 @@ def _set_academic_style():
             "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
             "mathtext.fontset": "dejavusans",
             "font.size": 9,
-            "axes.labelsize": 9,
+            "axes.labelsize": 10,
             "axes.titlesize": 9,
-            "xtick.labelsize": 8.5,
-            "ytick.labelsize": 8.5,
-            "legend.fontsize": 6.5,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "legend.fontsize": 9,
             "legend.title_fontsize": 6.5,
             "axes.spines.top": True,
             "axes.spines.right": True,
@@ -198,12 +198,12 @@ def _build_positions() -> list[float]:
     return positions
 
 
-def _style_axis(ax, ylabel: str, tick_format: str = "{x:,.1f}"):
+def _style_axis(ax, ylabel: str):
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="y", linestyle=(0, (2.2, 2.2)), alpha=0.28, color="#9a9a9a")
     ax.grid(False, axis="x")
     ax.set_axisbelow(True)
-    ax.yaxis.set_major_formatter(StrMethodFormatter(tick_format))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
 
 
 def plot_combo_metrics(output_paths: list[Path]):
@@ -262,13 +262,13 @@ def plot_combo_metrics(output_paths: list[Path]):
 
     latency_top = max(v + e for v, e in zip(latency_values, latency_errors))
     tps_top = max(v + e for v, e in zip(tps_values, tps_errors))
-    ax_latency.set_ylim(0, latency_top * 1.24)
+    ax_latency.set_ylim(0, latency_top * 1.5)
     ax_tps.set_ylim(0, tps_top * 1.22)
     ax_latency.tick_params(axis="x", bottom=False, top=False, labelbottom=False)
     ax_tps.tick_params(axis="x", bottom=False, top=False, pad=1)
     ax_tps.set_xticks(x_positions)
     ax_tps.set_xticklabels(x_labels)
-    ax_tps.set_xlabel("Decoupled Architecture at 100k Offered Load", labelpad=2)
+    # ax_tps.set_xlabel("Decoupled Architecture at 100k Offered Load", labelpad=2)
 
     ax_latency.set_xlim(min(x_positions) - 0.02, max(x_positions) + 0.02)
 
@@ -324,6 +324,7 @@ def plot_combo_metrics(output_paths: list[Path]):
     )
 
     output_paths[0].parent.mkdir(parents=True, exist_ok=True)
+    fig.align_ylabels([ax_latency, ax_tps])
     fig.subplots_adjust(
         hspace=0.10,
         bottom=0.22,
